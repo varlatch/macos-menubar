@@ -101,7 +101,9 @@ public final class SessionStore: ObservableObject {
     private func scheduleTimer() {
         timer?.invalidate()
         let timer = Timer(timeInterval: TimeInterval(preferences.refreshInterval), repeats: true) { [weak self] _ in
-            Task { @MainActor in await self?.refresh() }
+            // A constant: Swift 5 toolchains reject a captured `weak var` in a task.
+            let store = self
+            Task { @MainActor in await store?.refresh() }
         }
         timer.tolerance = 2
         RunLoop.main.add(timer, forMode: .common)

@@ -60,7 +60,10 @@ final class AppController: ObservableObject {
             .sink { [weak self] _ in self?.preferencesChanged() }
             .store(in: &subscriptions)
         NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)
-            .sink { [weak self] _ in Task { await self?.store.refresh() } }
+            .sink { [weak self] _ in
+                let store = self?.store
+                Task { await store?.refresh() }
+            }
             .store(in: &subscriptions)
 
         store.start()

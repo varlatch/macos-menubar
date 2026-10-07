@@ -9,8 +9,8 @@ import VarlatchKit
 /// directory whenever it changes, and answers
 /// `notifyutil -p com.varlatch.menubar.debug.<name>` for these names:
 /// dump-state, open-panel, settings, refresh, and these actions on the
-/// first server shown (or the one "Log In" would use): sign-in, cancel,
-/// verify, logout; and quit.
+/// first server shown (or the one "Log In" would use): sign-in, device,
+/// cancel, verify, logout; and quit.
 @MainActor
 enum DebugHooks {
     static let prefix = "com.varlatch.menubar.debug."
@@ -33,6 +33,7 @@ enum DebugHooks {
             "refresh": { Task { await AppController.shared.store.refresh() } },
             "sign-in": { firstServer.map(AppController.shared.signIn(to:)) },
             "cancel": { AppController.shared.cancelSignIn() },
+            "device": { firstServer.map(AppController.shared.signInFromAnotherDevice(to:)) },
             "verify": { AppController.shared.verify() },
             "logout": { firstServer.map(AppController.shared.logout) },
             "quit": { NSApp.terminate(nil) },
@@ -88,6 +89,7 @@ enum DebugHooks {
             "knownServer": store.knownServer ?? "",
             "rememberedServers": store.memory.servers,
             "signIn": "\(controller.signIn.state)",
+            "deviceSignIn": controller.deviceSignIn,
             "verifying": store.verifying,
             "verifyError": store.verifyError ?? "",
             "loggingOut": Array(controller.loggingOut),

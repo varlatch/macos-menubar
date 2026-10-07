@@ -10,12 +10,17 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     enum Category {
         static let expiring = "expiring"
         static let expired = "expired"
+        /// With an Another Device button (CLI 0.14.0 and newer).
+        static let expiringDevice = "expiring-device"
+        static let expiredDevice = "expired-device"
+        static let failedDevice = "failed-device"
         static let outcome = "outcome"
     }
 
     enum Action {
         static let renew = "renew"
         static let login = "login"
+        static let device = "device"
     }
 
     /// Notifications need the bundle identifier, so a bare `swift run` has none.
@@ -35,10 +40,18 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     private func categories() -> Set<UNNotificationCategory> {
         let renew = UNNotificationAction(identifier: Action.renew, title: "Renew Now")
         let login = UNNotificationAction(identifier: Action.login, title: "Log In")
+        let another = UNNotificationAction(identifier: Action.device, title: "Another Device")
+        let useAnother = UNNotificationAction(identifier: Action.device, title: "Use Another Device")
+        func category(_ id: String, _ actions: [UNNotificationAction]) -> UNNotificationCategory {
+            UNNotificationCategory(identifier: id, actions: actions, intentIdentifiers: [])
+        }
         return [
-            UNNotificationCategory(identifier: Category.expiring, actions: [renew], intentIdentifiers: []),
-            UNNotificationCategory(identifier: Category.expired, actions: [login], intentIdentifiers: []),
-            UNNotificationCategory(identifier: Category.outcome, actions: [], intentIdentifiers: []),
+            category(Category.expiring, [renew]),
+            category(Category.expired, [login]),
+            category(Category.expiringDevice, [renew, another]),
+            category(Category.expiredDevice, [login, another]),
+            category(Category.failedDevice, [useAnother]),
+            category(Category.outcome, []),
         ]
     }
 
@@ -67,36 +80,52 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     static func expiryIdentifier(for server: String) -> String { "expiry:" + server }
 
-    func post(_ events: [ExpiryEvent]) {
+    /// `device`: the CLI can sign in from another device.
+    func post(_ events: [ExpiryEvent], device: Bool) {
         for event in events {
             let content = UNMutableNotificationContent()
             content.title = event.title
             content.body = event.body()
-            content.categoryIdentifier = event.health == .expired ? Category.expired : Category.expiring
+            content.categoryIdentifier = event.health == .expired
+                ? (device ? Category.expiredDevice : Category.expired)
+                : (device ? Category.expiringDevice : Category.expiring)
             content.userInfo = ["server": event.server]
             content.threadIdentifier = "expiry"
             if event.health == .expired { content.sound = .default }
             // One per server: expired replaces expiring.
             deliver(Self.expiryIdentifier(for: event.server), content)
         }
-        DebugHooks.record("notified", events.map { "\($0.health.rawValue) \($0.server)" })
+        DebugHooks.record("notified", events.map {
+            "[\($0.health == .expired ? (device ? Category.expiredDevice : Category.expired) : (device ? Category.expiringDevice : Category.expiring))] \($0.health.rawValue) \($0.server)"
+        })
     }
 
-    func post(_ outcome: SignInController.Outcome) {
+    /// `device`: the CLI can sign in from another device, which a failed
+    /// browser sign-in then offers.
+    func post(_ outcome: SignInController.Outcome, device: Bool) {
         let content = UNMutableNotificationContent()
+        content.categoryIdentifier = Category.outcome
         switch outcome {
-        case .signedIn: content.title = "Logged in"
-        case .cancelled: content.title = "Sign-in cancelled"
-        case .failed:
+        case .signedIn:
+            content.title = "Logged in"
+        case .cancelled:
+            content.title = "Sign-in cancelled"
+        case .denied:
+            content.title = "Sign-in denied"
+            content.sound = .default
+        case .codeExpired:
+            content.title = "Sign-in code expired"
+            content.sound = .default
+        case .failed(_, _, let browser):
             content.title = "Sign-in failed"
             content.sound = .default
+            if browser, device { content.categoryIdentifier = Category.failedDevice }
         }
         content.body = outcome.message
-        content.categoryIdentifier = Category.outcome
         content.userInfo = ["server": outcome.server]
         deliver("signin:" + outcome.server, content)
         if case .signedIn = outcome { withdraw(Self.expiryIdentifier(for: outcome.server)) }
-        DebugHooks.record("notified", [outcome.message])
+        DebugHooks.record("notified", ["[\(content.categoryIdentifier)] \(outcome.message)"])
     }
 
     func postLogout(server: String, message: String, succeeded: Bool) {
@@ -146,6 +175,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             switch action {
             case Action.renew, Action.login:
                 if let server { controller.signIn(to: server) }
+            case Action.device:
+                if let server { controller.signInFromAnotherDevice(to: server) }
             case UNNotificationDefaultActionIdentifier:
                 StatusItem.openPanel()
             default:

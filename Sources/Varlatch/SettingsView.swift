@@ -9,6 +9,7 @@ struct SettingsView: View {
     @AppStorage(Preferences.Key.notifyExpiry) private var notifyExpiry = true
     @AppStorage(Preferences.Key.showWhenLoggedOut) private var showWhenLoggedOut = true
     @AppStorage(Preferences.Key.showLocalhost) private var showLocalhost = false
+    @AppStorage(Preferences.Key.sessionHours) private var sessionHours = 0
     @State private var loginStatus = LoginItemController.Status.off
 
     var body: some View {
@@ -24,6 +25,19 @@ struct SettingsView: View {
                         Button("Open Login Items") { SMAppService.openSystemSettingsLoginItems() }
                     }
                 }
+            }
+            Section {
+                Picker("Session length", selection: $sessionHours) {
+                    Text("Server default (12 hours)").tag(0)
+                    Divider()
+                    ForEach(1...24, id: \.self) { hours in
+                        Text(hours == 1 ? "1 hour" : "\(hours) hours").tag(hours)
+                    }
+                }
+            } footer: {
+                Text("How long a new sign-in lasts. Applies to every sign-in from this app, renewals included.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
             Section {
                 Stepper(value: $refreshInterval, in: Preferences.minimumRefreshInterval...3600, step: 15) {

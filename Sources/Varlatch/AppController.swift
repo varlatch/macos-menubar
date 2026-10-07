@@ -46,7 +46,7 @@ final class AppController: ObservableObject {
         notifier.install()
         store.onExpiryEvents = { [weak self] events in
             guard let self, self.store.preferences.notifyExpiry else { return }
-            self.notifier.post(events)
+            self.notifier.post(events, device: self.deviceSignIn)
         }
         // A server that is fine again, or gone, takes its expiry
         // notification with it.
@@ -56,7 +56,7 @@ final class AppController: ObservableObject {
         signIn.onOutcome = { [weak self] outcome in
             guard let self else { return }
             if case .signedIn(let server, _) = outcome { self.store.remember([server]) }
-            self.notifier.post(outcome)
+            self.notifier.post(outcome, device: self.deviceSignIn)
         }
         signIn.onFinished = { [weak self] in
             let store = self?.store
@@ -114,6 +114,19 @@ final class AppController: ObservableObject {
         if let link = signIn.signIn(server: server, ttlArguments: store.preferences.ttlArguments) {
             open(link)
         }
+    }
+
+    /// Device sign-in (`login --start` / `--wait`) arrived in CLI 0.14.0.
+    var deviceSignIn: Bool {
+        store.cliVersion.map { $0 >= Version.deviceSignIn } ?? false
+    }
+
+    /// Signs in to `server` from another device: an address and a code to
+    /// approve on any device, such as a phone. Takes over a browser sign-in
+    /// still waiting.
+    func signInFromAnotherDevice(to server: String) {
+        guard deviceSignIn else { return }
+        Task { await signIn.signInFromAnotherDevice(server: server, ttlArguments: store.preferences.ttlArguments) }
     }
 
     func cancelSignIn() {

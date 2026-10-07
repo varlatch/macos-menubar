@@ -46,6 +46,20 @@ again: the CLI revokes the credential it replaces only after the new one is
 verified and saved, so a cancelled or failed sign-in never signs you out.
 Quitting the app cancels a sign-in it started.
 
+## Sign in from another device
+
+When the browser on this Mac has no passkey for your server, sign in from
+another device instead: **Other Device** on the panel while a sign-in waits,
+**Sign In from Another Device** in a server's menu, or **Use Another
+Device** on a failed sign-in's notification (the expiry notifications have
+an **Another Device** button too). The panel shows an address, a code, and
+a QR code of the address for a phone's camera. Open the address on any
+device, sign in with your passkey, enter the code, and approve. The app
+collects the new credential, and as with a browser sign-in, the CLI revokes
+the credential it replaces only once the new one is saved. The code lasts
+10 minutes. This needs Varlatch CLI 0.14.0 or newer; with an older CLI these
+buttons do not show.
+
 Moving into *expiring* or *expired* triggers one notification each, with
 **Renew Now** or **Log In**. The app asks for permission to notify when it first starts; without it, it
 works the same, just silently.
@@ -69,6 +83,9 @@ are remembered in
 defaults (`defaults read com.varlatch.menubar`):
 
 - **Open at login** (on): starts the app when you log in.
+- **Session length** (the server's default, 12 hours): how long a new
+  sign-in lasts, from 1 to 24 hours. Applies to every sign-in the app
+  starts, renewals included.
 - **Check sessions every** (30 seconds, at least 15).
 - **Notify before a session expires** (on).
 - **Show in the menu bar when logged out** (on). With it off, the icon
@@ -130,8 +147,8 @@ defaults write com.varlatch.menubar debugHooks -bool true
 It then keeps its state in
 `~/Library/Application Support/com.varlatch.menubar/debug-state.json` and
 answers `notifyutil -p com.varlatch.menubar.debug.<name>`, where `<name>` is
-`dump-state`, `open-panel`, `settings`, `refresh`, `sign-in`, `cancel`,
-`verify`, `logout`, or `quit` (the actions use the first server shown).
+`dump-state`, `open-panel`, `settings`, `refresh`, `sign-in`, `device`,
+`cancel`, `verify`, `logout`, or `quit` (the actions use the first server shown).
 
 See [`CHANGELOG.md`](CHANGELOG.md) for what changed in each release.
 

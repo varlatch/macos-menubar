@@ -6,15 +6,27 @@
 
 <p align="center">
   Your <a href="https://github.com/varlatch/varlatch">Varlatch</a> sessions in the macOS menu bar:
-  which servers you are signed in to, and when each credential expires.
+  which servers you are signed in to, when each credential expires,
+  and one-click sign-in, renewal, and sign-out.
 </p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License: Apache-2.0"></a>
+  <a href="https://github.com/varlatch/macos-menubar/releases/latest"><img src="https://img.shields.io/github/v/release/varlatch/macos-menubar?label=release" alt="Latest release"></a>
 </p>
 
+<p align="center">
+  <img src="assets/screenshot.png" width="386" alt="The Varlatch panel: two servers, one with 5h 41m left and one expiring with 1h 11m left, both verified, with Renew buttons, Verify and Dashboard at the top, and the CLI version at the bottom">
+</p>
+
+```bash
+brew install varlatch/tap/varlatch-menubar
+mkdir -p ~/Applications && ln -sfn "$(brew --prefix)/opt/varlatch-menubar/Varlatch.app" ~/Applications/Varlatch.app
+open ~/Applications/Varlatch.app
+```
+
 Everything it shows comes from `varlatch status --json`, which reads local
-files only. Needs macOS 13 or newer and the `varlatch` CLI.
+files only; see [Install](#install).
 
 ## What it shows
 
@@ -61,6 +73,10 @@ given), and **Connect** starts the browser sign-in. **Add Server** below
 the sessions, or **Other Server** when logged out, opens the same form.
 
 ## Sign in from another device
+
+<p align="center">
+  <img src="assets/screenshot-device.png" width="386" alt="Signing in from another device: the panel shows the address vl.example.com/device, the code BCDF-GHJK, how long the code lasts, and a QR code of the address, with Copy Code, Open Link, and Cancel">
+</p>
 
 When the browser on this Mac has no passkey for your server, sign in from
 another device instead: **Other Device** on the panel while a sign-in waits,
@@ -143,10 +159,54 @@ Homebrew's stable `opt` link. Installed anywhere else, it is a regular
 login item. Either way, it shows as "Varlatch" in **System Settings >
 General > Login Items & Extensions**, and **Open at login** turns it off.
 
-## Building
+## Install
 
-Needs Apple's Command Line Tools (`xcode-select --install`); Xcode is not
-required.
+Needs macOS 13 or newer and [Homebrew](https://brew.sh), which brings
+Apple's Command Line Tools along; Xcode is not needed.
+
+```bash
+brew install varlatch/tap/varlatch-menubar
+```
+
+This builds the app from source on your Mac and installs it with the
+`varlatch` CLI and Node.js, which the CLI needs. Built here, the app is not
+quarantined, so it opens without a Gatekeeper prompt.
+
+Homebrew does not write to `/Applications`, so link the app into
+`~/Applications` once, which makes it show in Finder, Spotlight, and
+Launchpad. The link points at Homebrew's stable `opt` path, so it survives
+upgrades:
+
+```bash
+mkdir -p ~/Applications
+ln -sfn "$(brew --prefix)/opt/varlatch-menubar/Varlatch.app" ~/Applications/Varlatch.app
+open ~/Applications/Varlatch.app
+```
+
+On its first start the app asks to send notifications, opens its panel, and
+sets itself to open at login.
+
+**Upgrade** with `brew upgrade varlatch-menubar` (and `brew upgrade
+varlatch` for the CLI), then quit the app and open it again.
+
+**Uninstall:** turn off **Open at login** in Settings first (or delete
+`~/Library/LaunchAgents/com.varlatch.menubar.login.plist`), quit the app,
+then:
+
+```bash
+brew uninstall varlatch-menubar
+rm ~/Applications/Varlatch.app
+```
+
+Its settings are in `defaults read com.varlatch.menubar` and its state in
+`~/Library/Application Support/com.varlatch.menubar`; delete them too for a
+clean slate. The CLI and your sign-ins stay until you remove them
+(`brew uninstall varlatch`).
+
+## Building from source
+
+For working on the app. Needs Apple's Command Line Tools
+(`xcode-select --install`); Xcode is not required.
 
 ```bash
 scripts/bundle.sh          # builds build/Varlatch.app, signed ad hoc

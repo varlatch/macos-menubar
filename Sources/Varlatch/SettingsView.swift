@@ -15,10 +15,11 @@ struct SettingsView: View {
     }
 }
 
-/// Opens the Settings window from a menu bar app: `openSettings` from macOS
-/// 14 (captured from the panel's environment), the responder chain action on
-/// macOS 13. An accessory app is not active, so it is activated first, or the
-/// window would open behind other apps.
+/// Opens the Settings window from a menu bar app. An accessory app is not
+/// active, so it is activated first, or the window would open behind other
+/// apps. `openSettings` (macOS 14, in the SDKs of Swift 6 toolchains) is
+/// captured from the panel's environment; older toolchains get
+/// `SettingsLink` on macOS 14, and macOS 13 the responder chain action.
 @MainActor
 enum SettingsOpener {
     static var action: (() -> Void)?
@@ -32,7 +33,27 @@ enum SettingsOpener {
         }
     }
 
-    struct Capture: View {
+    /// A button that opens Settings.
+    struct Button<Label: View>: View {
+        @ViewBuilder var label: () -> Label
+
+        var body: some View {
+            #if compiler(>=6.0)
+            SwiftUI.Button(action: SettingsOpener.open, label: label)
+                .background(Capture())
+            #else
+            if #available(macOS 14, *) {
+                SettingsLink(label: label)
+                    .simultaneousGesture(TapGesture().onEnded { NSApp.activate(ignoringOtherApps: true) })
+            } else {
+                SwiftUI.Button(action: SettingsOpener.open, label: label)
+            }
+            #endif
+        }
+    }
+
+    #if compiler(>=6.0)
+    private struct Capture: View {
         var body: some View {
             if #available(macOS 14, *) {
                 Modern()
@@ -50,4 +71,5 @@ enum SettingsOpener {
                 .onAppear { SettingsOpener.action = { openSettings() } }
         }
     }
+    #endif
 }

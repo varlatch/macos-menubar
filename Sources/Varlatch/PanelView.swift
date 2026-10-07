@@ -26,14 +26,13 @@ struct PanelView: View {
                 Button("Check CLI") { Task { await model.refreshCLI() } }
             }
             HStack {
-                Button("Settings…") { SettingsOpener.open() }
+                SettingsOpener.Button { Text("Settings…") }
                 Spacer()
                 Button("Quit") { NSApp.terminate(nil) }
             }
         }
         .padding(14)
         .frame(width: 340)
-        .background(SettingsOpener.Capture())
         .onAppear {
             launchAtLogin = model.loginItemStatus == "enabled"
             DebugHooks.writeState()

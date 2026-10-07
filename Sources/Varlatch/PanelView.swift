@@ -3,6 +3,7 @@ import VarlatchKit
 
 /// The panel under the menu bar icon: one row per session with a live
 /// countdown, or what stands in the way.
+@MainActor
 struct PanelView: View {
     @EnvironmentObject private var store: SessionStore
 
@@ -107,6 +108,7 @@ struct PanelView: View {
 }
 
 /// One stored credential: its server, and how long it has left.
+@MainActor
 struct SessionRow: View {
     let server: ServerStatus
     let now: Date
@@ -143,6 +145,7 @@ struct SessionRow: View {
 }
 
 /// A short explanation in place of the sessions.
+@MainActor
 struct MessageView: View {
     let symbol: String
     let title: String

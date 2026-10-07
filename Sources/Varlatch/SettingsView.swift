@@ -2,6 +2,7 @@ import ServiceManagement
 import SwiftUI
 import VarlatchKit
 
+@MainActor
 struct SettingsView: View {
     @AppStorage(Preferences.Key.launchAtLogin) private var launchAtLogin = true
     @AppStorage(Preferences.Key.refreshInterval) private var refreshInterval = Preferences.defaultRefreshInterval
@@ -79,6 +80,7 @@ enum SettingsOpener {
     }
 
     /// A button that opens Settings.
+    @MainActor
     struct Button<Label: View>: View {
         @ViewBuilder var label: () -> Label
 

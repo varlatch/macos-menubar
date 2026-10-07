@@ -20,7 +20,7 @@
 </p>
 
 ```bash
-brew install varlatch/tap/varlatch-menubar
+brew install varlatch/tap/varlatch varlatch/tap/varlatch-menubar
 mkdir -p ~/Applications && ln -sfn "$(brew --prefix)/opt/varlatch-menubar/Varlatch.app" ~/Applications/Varlatch.app
 open ~/Applications/Varlatch.app
 ```
@@ -165,11 +165,14 @@ Needs macOS 13 or newer and [Homebrew](https://brew.sh), which brings
 Apple's Command Line Tools along; Xcode is not needed.
 
 ```bash
-brew install varlatch/tap/varlatch-menubar
+brew install varlatch/tap/varlatch varlatch/tap/varlatch-menubar
 ```
 
 This builds the app from source on your Mac and installs it with the
-`varlatch` CLI and Node.js, which the CLI needs. Built here, the app is not
+`varlatch` CLI and Node.js, which the CLI needs. Homebrew loads formulae
+from a tap like varlatch/tap only once you trust them, and installing a
+formula by its full name trusts it; the app needs the CLI, so name both
+(or run `brew trust varlatch/tap` first). Built here, the app is not
 quarantined, so it opens without a Gatekeeper prompt.
 
 Homebrew does not write to `/Applications`, so link the app into

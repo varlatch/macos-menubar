@@ -2,7 +2,8 @@
 
 ## 0.1.0 (2026-10-07)
 
-First release, installed with `brew install varlatch/tap/varlatch-menubar`.
+First release, installed with
+`brew install varlatch/tap/varlatch varlatch/tap/varlatch-menubar`.
 
 - **Sessions in the menu bar**, read offline from `varlatch status --json`
   every 30 seconds: the Varlatch mark with an amber badge while a credential

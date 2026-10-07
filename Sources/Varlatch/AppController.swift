@@ -26,11 +26,13 @@ final class AppController: ObservableObject {
 
     let store: SessionStore
     let signIn: SignInController
+    let releases = ReleaseChecker(cacheURL: AppSupport.directory.appendingPathComponent("update.json"))
     let notifier = Notifier()
     let loginItem = LoginItemController()
     /// Servers with a logout running.
     @Published private(set) var loggingOut: Set<String> = []
     private var subscriptions: Set<AnyCancellable> = []
+    private var releaseTimer: Timer?
 
     private init() {
         UserDefaults.standard.register(defaults: Preferences.registrationDefaults)
@@ -80,8 +82,35 @@ final class AppController: ObservableObject {
             }
             .store(in: &subscriptions)
 
+        releases.onNewRelease = { [weak self] version in
+            guard let self else { return }
+            self.notifier.postRelease(version, current: self.store.cliVersion, update: self.update(to: version))
+        }
+        releases.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] in self?.objectWillChange.send() }
+            .store(in: &subscriptions)
+        // A newly installed CLI can make the cached release old news.
+        store.$cliVersion
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] _ in self?.checkReleases(maxAge: ReleaseRules.backgroundMaxAge) }
+            .store(in: &subscriptions)
+
         store.start()
         loginItem.reconcileAtLaunch(wanted: store.preferences.launchAtLogin)
+        // Hourly; the rules decide whether that is a request.
+        let timer = Timer(timeInterval: 3600, repeats: true) { [weak self] _ in
+            let controller = self
+            Task { @MainActor in controller?.checkReleases(maxAge: ReleaseRules.backgroundMaxAge) }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        releaseTimer = timer
+        Task {
+            // After the first read of the CLI version.
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            checkReleases(maxAge: ReleaseRules.backgroundMaxAge)
+        }
         DebugHooks.install()
 
         if firstLaunch {
@@ -103,6 +132,7 @@ final class AppController: ObservableObject {
         store.update(preferences: new)
         if new.launchAtLogin != old.launchAtLogin { loginItem.set(new.launchAtLogin) }
         if new.notifyExpiry && !old.notifyExpiry { notifier.requestPermission() }
+        if new.checkUpdates && !old.checkUpdates { checkReleases(maxAge: ReleaseRules.backgroundMaxAge) }
         DebugHooks.writeState()
     }
 
@@ -168,12 +198,90 @@ final class AppController: ObservableObject {
         signIn.cancel(quietly: true)
     }
 
-    /// The panel opened: read the CLI version and the sessions again.
+    /// The panel opened: read the CLI version and the sessions again, and
+    /// with release checks on, check again when the last one is over an
+    /// hour old.
     func panelOpened() {
         Task {
             await store.refreshVersion()
             await store.refresh()
+            checkReleases(maxAge: ReleaseRules.panelMaxAge)
             DebugHooks.writeState()
+        }
+    }
+
+    // MARK: The CLI and its updates
+
+    /// The command that installs the CLI with Homebrew.
+    static let installCommand = "brew install varlatch/tap/varlatch"
+
+    /// How the CLI the app runs is installed.
+    var cliInstall: CLIInstall? {
+        store.cliPath.map { CLIInstall.kind(of: $0) }
+    }
+
+    /// Installs the CLI with Homebrew, in Terminal.
+    func installCLI() {
+        guard let brew = CLIInstall.brewPath() else { return }
+        TerminalCommand.run(title: "Installing the Varlatch CLI with Homebrew",
+                            command: "\(TerminalCommand.shellQuoted(brew)) install varlatch/tap/varlatch")
+    }
+
+    /// `brew upgrade varlatch`, in Terminal.
+    func upgradeWithHomebrew() {
+        guard let brew = CLIInstall.brewPath() else { return }
+        TerminalCommand.run(title: "Updating the Varlatch CLI with Homebrew",
+                            command: "\(TerminalCommand.shellQuoted(brew)) upgrade varlatch")
+    }
+
+    /// Checks for a newer CLI release, with "check for new CLI releases" on.
+    func checkReleases(maxAge: TimeInterval) {
+        guard store.preferences.checkUpdates else { return }
+        Task { await releases.check(current: store.cliVersion, maxAge: maxAge) }
+    }
+
+    /// A newer CLI release, with release checks on.
+    var availableRelease: Version? {
+        store.preferences.checkUpdates ? releases.available(current: store.cliVersion) : nil
+    }
+
+    enum Update: Equatable {
+        /// `brew upgrade varlatch`.
+        case homebrew
+        /// `varlatch self-update <version>` (CLI 0.11.0 and newer).
+        case selfUpdate
+        /// Release notes only: updated the way it was installed.
+        case manual
+    }
+
+    func update(to version: Version) -> Update {
+        switch cliInstall {
+        case .homebrew: return .homebrew
+        case .release:
+            return (store.cliVersion.map { $0 >= Version.selfUpdate } ?? false) ? .selfUpdate : .manual
+        default: return .manual
+        }
+    }
+
+    /// Updates the CLI in Terminal: Homebrew's, or the release build's own
+    /// self-update, which shows what it checked and asks before replacing
+    /// anything.
+    func updateCLI(to version: Version) {
+        switch update(to: version) {
+        case .homebrew:
+            upgradeWithHomebrew()
+        case .selfUpdate:
+            guard let path = store.cliPath else { return }
+            let directory = (path as NSString).deletingLastPathComponent
+            let quoted = TerminalCommand.shellQuoted(path)
+            // sudo resets PATH, so the release CLI's `env node` would not
+            // find node: name it.
+            let command = FileManager.default.isWritableFile(atPath: directory)
+                ? "\(quoted) self-update \(version)"
+                : "sudo \"$(command -v node)\" \(quoted) self-update \(version)"
+            TerminalCommand.run(title: "Updating the Varlatch CLI", command: command)
+        case .manual:
+            NSWorkspace.shared.open(ReleaseChecker.releaseURL(version))
         }
     }
 

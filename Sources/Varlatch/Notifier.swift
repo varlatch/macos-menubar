@@ -14,6 +14,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         static let expiringDevice = "expiring-device"
         static let expiredDevice = "expired-device"
         static let failedDevice = "failed-device"
+        static let release = "release"
+        static let releaseUpdate = "release-update"
         static let outcome = "outcome"
     }
 
@@ -21,6 +23,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         static let renew = "renew"
         static let login = "login"
         static let device = "device"
+        static let update = "update"
+        static let notes = "notes"
     }
 
     /// Notifications need the bundle identifier, so a bare `swift run` has none.
@@ -51,6 +55,9 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             category(Category.expiringDevice, [renew, another]),
             category(Category.expiredDevice, [login, another]),
             category(Category.failedDevice, [useAnother]),
+            category(Category.release, [UNNotificationAction(identifier: Action.notes, title: "Release Notes")]),
+            category(Category.releaseUpdate, [UNNotificationAction(identifier: Action.update, title: "Update"),
+                                              UNNotificationAction(identifier: Action.notes, title: "Release Notes")]),
             category(Category.outcome, []),
         ]
     }
@@ -138,6 +145,27 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         DebugHooks.record("notified", [message])
     }
 
+    /// A newer CLI release, once per release.
+    func postRelease(_ version: Version, current: Version?, update: AppController.Update) {
+        let content = UNMutableNotificationContent()
+        content.title = "Varlatch CLI \(version) is available"
+        let have = current.map { " (you have \($0))" } ?? ""
+        switch update {
+        case .homebrew:
+            content.body = "Update with Homebrew: brew upgrade varlatch\(have)."
+            content.categoryIdentifier = Category.releaseUpdate
+        case .selfUpdate:
+            content.body = "Update with varlatch self-update\(have)."
+            content.categoryIdentifier = Category.releaseUpdate
+        case .manual:
+            content.body = "A new release of the CLI is out\(have)."
+            content.categoryIdentifier = Category.release
+        }
+        content.userInfo = ["version": version.description]
+        deliver("release:" + version.description, content)
+        DebugHooks.record("notified", ["[\(content.categoryIdentifier)] \(content.title)"])
+    }
+
     private func deliver(_ identifier: String, _ content: UNNotificationContent) {
         center?.add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
     }
@@ -169,6 +197,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                                             withCompletionHandler completionHandler: @escaping () -> Void) {
         let action = response.actionIdentifier
         let server = response.notification.request.content.userInfo["server"] as? String
+        let version = (response.notification.request.content.userInfo["version"] as? String).flatMap(Version.init)
         Task { @MainActor in
             DebugHooks.record("answered", [action + " " + (server ?? "")])
             let controller = AppController.shared
@@ -177,6 +206,10 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                 if let server { controller.signIn(to: server) }
             case Action.device:
                 if let server { controller.signInFromAnotherDevice(to: server) }
+            case Action.update:
+                if let version { controller.updateCLI(to: version) }
+            case Action.notes:
+                if let version { NSWorkspace.shared.open(ReleaseChecker.releaseURL(version)) }
             case UNNotificationDefaultActionIdentifier:
                 StatusItem.openPanel()
             default:

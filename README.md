@@ -46,6 +46,20 @@ again: the CLI revokes the credential it replaces only after the new one is
 verified and saved, so a cancelled or failed sign-in never signs you out.
 Quitting the app cancels a sign-in it started.
 
+## First run
+
+Without the `varlatch` CLI, the panel explains what it is for and offers
+**Install in Terminal**, which opens Terminal and runs
+`brew install varlatch/tap/varlatch` (the app picks the CLI up by itself
+once it is there), or **Copy Command**. Without Homebrew, it points to
+[brew.sh](https://brew.sh) first. The release CLI needs Node.js 22 or newer,
+which the Homebrew formula brings along.
+
+With the CLI but no server known yet, the panel asks for the server's
+address (`varlatch.example.com`; `https://` is added when no scheme is
+given), and **Connect** starts the browser sign-in. **Add Server** below
+the sessions, or **Other Server** when logged out, opens the same form.
+
 ## Sign in from another device
 
 When the browser on this Mac has no passkey for your server, sign in from
@@ -67,15 +81,32 @@ works the same, just silently.
 Servers on `localhost` or `127.*` are left out unless **Show localhost
 servers** is on.
 
+## Updates
+
+With **Check for new CLI releases** on, the panel's footer shows when a
+newer CLI release is out, with **Release Notes** and, for a CLI the app
+knows how to update, **Update in Terminal**: `brew upgrade varlatch` for a
+Homebrew CLI, `varlatch self-update` for the release build (Varlatch 0.11.0
+and newer; it checks the download and asks before replacing anything). A
+CLI built from a source checkout, or installed some other way, gets the
+release notes. A new release also triggers one notification.
+
+The app itself updates with Homebrew: `brew upgrade varlatch-menubar`.
+
 ## Privacy
 
 The app runs `varlatch status --json` on a timer. That command reads
 `~/.config/varlatch/credentials.json` and repository-local state; it makes
 no network requests and never uses a stored credential. The app never reads
 the credentials file itself. The only network requests are the ones you
-start with a click: sign in, renew, verify, log out. The servers you used
-are remembered in
-`~/Library/Application Support/com.varlatch.menubar/servers.json`.
+start with a click (sign in, renew, verify, log out) and, with **Check for
+new CLI releases** on, an anonymous request for the latest release to
+GitHub's API, cached in
+`~/Library/Application Support/com.varlatch.menubar/update.json`. That
+check runs twice a day in the background, again when you open the panel and
+the last one is over an hour old, and when the cache names an older release
+than the CLI you have; never more than once an hour. The servers you used
+are remembered in `servers.json` in the same directory.
 
 ## Settings
 
@@ -92,6 +123,9 @@ defaults (`defaults read com.varlatch.menubar`):
   disappears while no credentials are stored; open the app again (from
   Finder, Spotlight, or Launchpad) to get to Settings.
 - **Show localhost servers** (off).
+- **CLI path** (automatic): the CLI to run, for one installed somewhere
+  else or a development build. **Choose…** picks the file.
+- **Check for new CLI releases** (off).
 
 ## Finding the CLI
 
@@ -148,7 +182,8 @@ It then keeps its state in
 `~/Library/Application Support/com.varlatch.menubar/debug-state.json` and
 answers `notifyutil -p com.varlatch.menubar.debug.<name>`, where `<name>` is
 `dump-state`, `open-panel`, `settings`, `refresh`, `sign-in`, `device`,
-`cancel`, `verify`, `logout`, or `quit` (the actions use the first server shown).
+`cancel`, `verify`, `logout`, `quit`, `check-releases`, or `install-cli`
+(the actions use the first server shown).
 
 See [`CHANGELOG.md`](CHANGELOG.md) for what changed in each release.
 

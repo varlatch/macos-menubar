@@ -31,8 +31,23 @@ A click opens a panel with one row per server and a live countdown
 old for `varlatch status`, or its error. Hovering the icon shows the same
 in a tooltip.
 
-Moving into *expiring* or *expired* triggers one notification each. The
-app asks for permission to notify when it first starts; without it, it
+Each row has **Renew** (or **Log In** once expired) and a menu with **Open
+Dashboard**, **Copy Address**, and **Log Out**. Above them, **Verify**
+checks every stored credential with its server (`varlatch status --probe`)
+and puts the result on its row, and **Dashboard** opens your server in the
+browser. After a full logout, **Log In** still targets the last server you
+used.
+
+Signing in needs no terminal window. The CLI opens your browser for the
+passkey prompt, and while it waits the panel shows "Signing in to …" with
+**Open Link**, for when the page opened in the wrong browser, and
+**Cancel**. The result arrives as a notification. Renewing is signing in
+again: the CLI revokes the credential it replaces only after the new one is
+verified and saved, so a cancelled or failed sign-in never signs you out.
+Quitting the app cancels a sign-in it started.
+
+Moving into *expiring* or *expired* triggers one notification each, with
+**Renew Now** or **Log In**. The app asks for permission to notify when it first starts; without it, it
 works the same, just silently.
 
 Servers on `localhost` or `127.*` are left out unless **Show localhost
@@ -43,7 +58,10 @@ servers** is on.
 The app runs `varlatch status --json` on a timer. That command reads
 `~/.config/varlatch/credentials.json` and repository-local state; it makes
 no network requests and never uses a stored credential. The app never reads
-the credentials file itself.
+the credentials file itself. The only network requests are the ones you
+start with a click: sign in, renew, verify, log out. The servers you used
+are remembered in
+`~/Library/Application Support/com.varlatch.menubar/servers.json`.
 
 ## Settings
 
@@ -112,7 +130,8 @@ defaults write com.varlatch.menubar debugHooks -bool true
 It then keeps its state in
 `~/Library/Application Support/com.varlatch.menubar/debug-state.json` and
 answers `notifyutil -p com.varlatch.menubar.debug.<name>`, where `<name>` is
-`dump-state`, `open-panel`, `settings`, or `refresh`.
+`dump-state`, `open-panel`, `settings`, `refresh`, `sign-in`, `cancel`,
+`verify`, `logout`, or `quit` (the actions use the first server shown).
 
 See [`CHANGELOG.md`](CHANGELOG.md) for what changed in each release.
 

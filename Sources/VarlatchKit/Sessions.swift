@@ -97,6 +97,15 @@ public enum Sessions {
         return h > 0 ? "\(h)h \(m)m left" : "\(m)m left"
     }
 
+    /// What a `--probe` found, after the line under a server's name.
+    public static func probeText(_ probe: ServerStatus.Probe) -> String {
+        switch probe.state {
+        case .valid: return "verified"
+        case .invalid: return "invalid" + (probe.detail.map { " (\($0))" } ?? "")
+        case .unreachable: return "server unreachable"
+        }
+    }
+
     /// The line under a server's name in the panel.
     public static func detail(for server: ServerStatus, now: Date = Date()) -> String {
         if server.health(now: now) == .expired { return "Session expired" }

@@ -11,6 +11,8 @@ struct VarlatchApp: App {
         MenuBarExtra(isInserted: $controller.menuBarItemShown) {
             PanelView()
                 .environmentObject(store)
+                .environmentObject(controller.signIn)
+                .environmentObject(controller)
         } label: {
             let state = store.overall()
             Image(nsImage: MenuBarIcon.image(for: state))

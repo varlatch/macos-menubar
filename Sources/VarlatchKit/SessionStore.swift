@@ -27,28 +27,48 @@ public final class SessionStore: ObservableObject {
     @Published public private(set) var cliVersion: Version?
     @Published public private(set) var lastRead: Date?
     @Published public private(set) var preferences: Preferences
+    /// Servers seen before, so "Log in" has a target after a full logout.
+    @Published public private(set) var memory: ServerMemory
+    @Published public private(set) var verifying = false
+    @Published public private(set) var verifyError: String?
+    /// The last `--probe` result per server, for as long as the same
+    /// credential is stored.
+    @Published public private(set) var probes: [String: ProbeResult] = [:]
+
+    public struct ProbeResult: Equatable, Sendable {
+        public var probe: ServerStatus.Probe
+        public var credentialId: String?
+    }
 
     /// Called with each move into *expiring* or *expired*, whatever the
     /// notification setting says; the app decides whether to show them.
     public var onExpiryEvents: (([ExpiryEvent]) -> Void)?
 
     public let statusTimeout: TimeInterval = 15
+    public let verifyTimeout: TimeInterval = 60
+    public let logoutTimeout: TimeInterval = 60
     private let baseEnvironment: [String: String]
     private let home: String
+    private let memoryURL: URL?
     private let isExecutable: (String) -> Bool
     private var tracker = ExpiryTracker()
     private var timer: Timer?
     private var reading = false
     private var readQueued = false
 
+    /// - Parameter stateDirectory: where to keep the servers seen before;
+    ///   nil keeps them in memory only.
     public init(preferences: Preferences,
                 baseEnvironment: [String: String] = ProcessInfo.processInfo.environment,
                 home: String = NSHomeDirectory(),
+                stateDirectory: URL? = nil,
                 isExecutable: @escaping (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }) {
         self.preferences = preferences
         self.baseEnvironment = baseEnvironment
         self.home = home
         self.isExecutable = isExecutable
+        memoryURL = stateDirectory?.appendingPathComponent("servers.json")
+        memory = memoryURL.map(ServerMemory.load(from:)) ?? ServerMemory()
     }
 
     /// The servers to show: localhost ones only with "show localhost" on.
@@ -144,9 +164,87 @@ public final class SessionStore: ObservableObject {
             cliState = .unavailable("unreadable status output")
             return
         }
+        apply(document)
+    }
+
+    private func apply(_ document: StatusDocument) {
         allServers = document.servers
         cliState = .ready
+        if !document.servers.isEmpty { remember(document.servers.map(\.server)) }
+        // A probe result belongs to the credential it checked.
+        probes = probes.filter { entry in
+            document.servers.contains { $0.server == entry.key && $0.credentialId == entry.value.credentialId }
+        }
         emitExpiryEvents()
+    }
+
+    // MARK: Servers seen before
+
+    /// Where "Log in" goes: a stored server (a real deployment before a
+    /// localhost one), else one seen before.
+    public var knownServer: String? {
+        servers.first { !Sessions.isLocalhost($0.server) }?.server ?? servers.first?.server
+            ?? memory.preferred(showLocalhost: preferences.showLocalhost)
+    }
+
+    public func remember(_ seen: [String]) {
+        var next = memory
+        next.remember(seen)
+        guard next != memory else { return }
+        memory = next
+        if let memoryURL { memory.save(to: memoryURL) }
+    }
+
+    // MARK: Actions
+
+    /// `status --probe --json`: one authenticated request per stored
+    /// credential, to see that it still works and its server answers. Only
+    /// ever on request. The results stay on the rows while the same
+    /// credentials are stored.
+    public func verify() async {
+        guard !verifying else { return }
+        guard let cli = resolveCLI() else { return }
+        verifying = true
+        verifyError = nil
+        let result = await CLIProcess.run(cli.path, ["status", "--probe", "--json"], environment: cli.environment,
+                                          timeout: verifyTimeout)
+        verifying = false
+        guard result.succeeded else {
+            let detail = result.lastErrorLines()
+            verifyError = "Verify failed" + (detail.isEmpty ? "." : ": " + detail)
+            return
+        }
+        guard let document = StatusDocument.parse(result.stdout) else {
+            verifyError = "Verify failed: unreadable output from the CLI."
+            return
+        }
+        // The probe may have filled in missing expiry details, so the
+        // document replaces the last read.
+        probes = Dictionary(document.servers.compactMap { s in
+            s.probe.map { (s.server, ProbeResult(probe: $0, credentialId: s.credentialId)) }
+        }, uniquingKeysWith: { a, _ in a })
+        apply(document)
+    }
+
+    public func probe(for server: ServerStatus) -> ServerStatus.Probe? {
+        guard let result = probes[server.server], result.credentialId == server.credentialId else { return nil }
+        return result.probe
+    }
+
+    /// `logout --server <url>`: revokes the credential on its server and
+    /// removes it here. Returns the message to show.
+    public func logout(server: String) async -> (succeeded: Bool, message: String) {
+        let host = Sessions.host(of: server)
+        guard let cli = resolveCLI() else { return (false, "Log out of \(host) failed: the varlatch CLI was not found.") }
+        let result = await CLIProcess.run(cli.path, ["logout", "--server", server], environment: cli.environment,
+                                          timeout: logoutTimeout)
+        await refresh()
+        guard result.succeeded else { return (false, "Log out of \(host) failed: \(result.lastErrorLines())") }
+        // "<server>: removed locally; server revocation failed (…)" is worth
+        // reading as it is.
+        let output = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if output.contains("revocation failed") { return (true, output) }
+        return (true, "Logged out of \(host).")
     }
 
     private func emitExpiryEvents() {

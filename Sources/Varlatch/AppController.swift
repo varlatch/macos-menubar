@@ -25,13 +25,18 @@ final class AppController: ObservableObject {
     private var shown = true
 
     let store: SessionStore
+    let signIn: SignInController
     let notifier = Notifier()
     let loginItem = LoginItemController()
+    /// Servers with a logout running.
+    @Published private(set) var loggingOut: Set<String> = []
     private var subscriptions: Set<AnyCancellable> = []
 
     private init() {
         UserDefaults.standard.register(defaults: Preferences.registrationDefaults)
-        store = SessionStore(preferences: Preferences(UserDefaults.standard))
+        let store = SessionStore(preferences: Preferences(UserDefaults.standard), stateDirectory: AppSupport.directory)
+        self.store = store
+        signIn = SignInController { store.resolveCLI() }
     }
 
     func launch() {
@@ -48,6 +53,15 @@ final class AppController: ObservableObject {
         store.$allServers
             .sink { [weak self] servers in self?.notifier.withdrawResolved(servers) }
             .store(in: &subscriptions)
+        signIn.onOutcome = { [weak self] outcome in
+            guard let self else { return }
+            if case .signedIn(let server, _) = outcome { self.store.remember([server]) }
+            self.notifier.post(outcome)
+        }
+        signIn.onFinished = { [weak self] in
+            let store = self?.store
+            Task { await store?.refresh() }
+        }
         store.objectWillChange
             .receive(on: RunLoop.main)
             .sink { [weak self] in
@@ -90,6 +104,55 @@ final class AppController: ObservableObject {
         if new.launchAtLogin != old.launchAtLogin { loginItem.set(new.launchAtLogin) }
         if new.notifyExpiry && !old.notifyExpiry { notifier.requestPermission() }
         DebugHooks.writeState()
+    }
+
+    // MARK: Actions
+
+    /// Signs in to `server` in the browser (renewing is the same). While a
+    /// sign-in waits, opens its link again instead.
+    func signIn(to server: String) {
+        if let link = signIn.signIn(server: server, ttlArguments: store.preferences.ttlArguments) {
+            open(link)
+        }
+    }
+
+    func cancelSignIn() {
+        signIn.cancel()
+    }
+
+    func logout(_ server: String) {
+        guard !loggingOut.contains(server) else { return }
+        loggingOut.insert(server)
+        Task {
+            let result = await store.logout(server: server)
+            loggingOut.remove(server)
+            notifier.postLogout(server: server, message: result.message, succeeded: result.succeeded)
+        }
+    }
+
+    func verify() {
+        Task { await store.verify() }
+    }
+
+    /// The server's dashboard is the server's own address.
+    func openDashboard(_ server: String? = nil) {
+        guard let server = server ?? store.knownServer else { return }
+        open(server)
+    }
+
+    func open(_ address: String) {
+        guard let url = URL(string: address), url.scheme == "https" || url.scheme == "http" else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    /// The app is quitting: a sign-in it started must not outlive it.
+    func terminate() {
+        signIn.cancel(quietly: true)
     }
 
     /// The panel opened: read the CLI version and the sessions again.

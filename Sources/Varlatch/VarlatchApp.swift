@@ -1,23 +1,27 @@
 import SwiftUI
+import VarlatchKit
 
 @main
 struct VarlatchApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var model = SpikeModel.shared
+    @ObservedObject private var store = AppController.shared.store
+    @ObservedObject private var controller = AppController.shared
 
     var body: some Scene {
-        MenuBarExtra {
+        MenuBarExtra(isInserted: $controller.menuBarItemShown) {
             PanelView()
-                .environmentObject(model)
+                .environmentObject(store)
         } label: {
-            Image(nsImage: MenuBarIcon.image(badge: model.badge))
-                .accessibilityLabel("Varlatch")
+            let state = store.overall()
+            Image(nsImage: MenuBarIcon.image(for: state))
+                .accessibilityLabel(MenuBarIcon.accessibilityLabel(for: state))
+                .background(SettingsOpener.Capture())
         }
         .menuBarExtraStyle(.window)
 
         Settings {
             SettingsView()
-                .environmentObject(model)
+                .environmentObject(store)
         }
     }
 }

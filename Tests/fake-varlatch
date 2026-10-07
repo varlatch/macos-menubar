@@ -1,0 +1,103 @@
+#!/bin/bash
+# A stand-in for the varlatch CLI, for the tests and for trying the app
+# without a server. It works in $FAKE_VARLATCH_DIR (default: $HOME):
+#
+#   calls.log    every call, one line each
+#   status.json  what `status --json` prints (no sessions when missing)
+#   probe.json   what `status --probe --json` prints (status.json when missing)
+#   fake.env     sourced on every call, so a running app's fake can change
+#                behavior without a restart
+#
+# and these variables choose how things end:
+#
+#   FAKE_VERSION      what --version reports (default 0.15.1)
+#   FAKE_NO_STATUS    set: act like a CLI from before `status`
+#   FAKE_LOGIN_SLEEP  seconds a browser sign-in waits (default 0)
+#   FAKE_LOGIN_RC     its exit status (default 0)
+#   FAKE_REVOKE_FAIL  set: a sign-in reports that the old credential stayed
+#   FAKE_START_FAIL   set: `login --start` is refused
+#   FAKE_WAIT         approve | pending-once | deny | expire | hang
+#   FAKE_LOGOUT_FAIL  set: logout fails
+dir=${FAKE_VARLATCH_DIR:-$HOME}
+# shellcheck source=/dev/null
+[ -f "$dir/fake.env" ] && . "$dir/fake.env"
+echo "cli $*" >> "$dir/calls.log"
+
+server=""
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  [ "${args[$i]}" = "--server" ] && server=${args[$((i + 1))]:-}
+done
+
+case "${1:-}" in
+  --version) echo "varlatch ${FAKE_VERSION:-0.15.1} (migration 26)"; exit 0 ;;
+  --help) echo "Usage: varlatch <command>"; exit 0 ;;
+  status)
+    if [ -n "${FAKE_NO_STATUS:-}" ]; then
+      echo "Usage: varlatch <command> [options]" >&2
+      exit 64
+    fi
+    if [ "${2:-}" = "--probe" ] && [ -f "$dir/probe.json" ]; then
+      cat "$dir/probe.json"
+    else
+      cat "$dir/status.json" 2>/dev/null || echo '{"version":1,"servers":[],"repo":null}'
+    fi
+    exit 0 ;;
+  logout)
+    if [ -n "${FAKE_LOGOUT_FAIL:-}" ]; then
+      echo "varlatch: No stored credential for $server" >&2
+      exit 1
+    fi
+    echo "$server: credential revoked and removed."
+    exit 0 ;;
+  login) ;;
+  *) echo "varlatch: unknown command ${1:-}" >&2; exit 64 ;;
+esac
+
+mode="browser"
+for arg in "$@"; do
+  case "$arg" in --start) mode="start" ;; --wait) mode="wait" ;; esac
+done
+
+case "$mode" in
+  start)
+    if [ -n "${FAKE_START_FAIL:-}" ]; then
+      echo "varlatch login: the server refused to start a sign-in (NOT_FOUND)" >&2
+      exit 1
+    fi
+    expires=$(date -u -v+10M '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null || echo "2099-01-01T00:10:00.000Z")
+    echo "{\"verificationUri\":\"${server:-https://vl.example.com}/device\",\"userCode\":\"BCDF-GHJK\",\"expiresAt\":\"$expires\"}"
+    ;;
+  wait)
+    n=$(cat "$dir/wait-count" 2>/dev/null || echo 0)
+    n=$((n + 1)); echo "$n" > "$dir/wait-count"
+    case "${FAKE_WAIT:-approve}" in
+      approve) ;;
+      pending-once)
+        if [ "$n" -eq 1 ]; then
+          sleep 1
+          echo '{"state":"pending"}'
+          echo "varlatch login: not approved yet." >&2
+          exit 75
+        fi ;;
+      deny) echo '{"state":"denied"}'; echo "varlatch login: the sign-in was denied in the browser. Nothing was stored." >&2; exit 77 ;;
+      expire) echo '{"state":"expired"}'; echo "varlatch login: the sign-in expired before it was approved and collected (a code lasts 10 minutes). Nothing was stored." >&2; exit 77 ;;
+      hang) sleep 600; exit 75 ;;
+    esac
+    echo '{"state":"signed-in","credentialId":"crd_test","expiresAt":"2099-01-01T12:00:00Z"}'
+    ;;
+  browser)
+    echo "Complete passkey sign-in in your browser:"
+    echo "  ${server:-https://vl.example.com}/enroll?callback=http%3A%2F%2F127.0.0.1%3A49152%2F"
+    sleep "${FAKE_LOGIN_SLEEP:-0}"
+    if [ "${FAKE_LOGIN_RC:-0}" -ne 0 ]; then
+      echo "varlatch login: browser sign-in failed: no passkey" >&2
+      exit "$FAKE_LOGIN_RC"
+    fi
+    echo "Issued CLI credential (expires 2099-01-01T12:00:00Z)."
+    echo "Logged in to ${server:-https://vl.example.com} (server 0.15.1, API v1)."
+    if [ -n "${FAKE_REVOKE_FAIL:-}" ]; then
+      echo "varlatch: previous credential not revoked (network error); it may remain live." >&2
+    fi
+    ;;
+esac

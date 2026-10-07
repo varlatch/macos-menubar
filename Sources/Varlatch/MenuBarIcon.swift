@@ -1,13 +1,11 @@
 import AppKit
+import VarlatchKit
 
 /// The Varlatch mark for the menu bar: a template image in the system's
-/// monochrome, and with a small colored badge when something needs
-/// attention. Color stays in the badge.
+/// monochrome, with a small amber badge while a credential is expiring and a
+/// red one when signed out, expired, or the CLI is unusable (the mark is
+/// dimmed then). Color stays in the badge.
 enum MenuBarIcon {
-    enum Badge: String {
-        case none, warning, error
-    }
-
     /// Points; the mark keeps its aspect ratio.
     static let height: CGFloat = 16
 
@@ -20,17 +18,23 @@ enum MenuBarIcon {
         return image
     }()
 
-    static func image(badge: Badge) -> NSImage {
+    private static var cache: [String: NSImage] = [:]
+
+    static func image(for state: OverallState) -> NSImage {
+        let badge = state.badge
+        let dimmed = state.cliUnusable
         guard badge != .none else { return mark }
+        let key = "\(badge.rawValue)-\(dimmed)"
+        if let cached = cache[key] { return cached }
         let color: NSColor = badge == .warning ? .systemOrange : .systemRed
         let markSize = mark.size
         let size = NSSize(width: markSize.width + 2, height: markSize.height)
         // Drawn when the menu bar draws it, so the mark follows the menu
-        // bar's own light or dark appearance like a template image does.
+        // bar's own light or dark appearance as a template image does.
         let image = NSImage(size: size, flipped: false) { rect in
             let markRect = NSRect(origin: .zero, size: markSize)
             mark.draw(in: markRect)
-            NSColor.labelColor.set()
+            NSColor.labelColor.withAlphaComponent(dimmed ? 0.55 : 1).set()
             markRect.fill(using: .sourceAtop)
             let d: CGFloat = 7
             let dot = NSRect(x: rect.maxX - d, y: rect.maxY - d, width: d, height: d)
@@ -42,6 +46,17 @@ enum MenuBarIcon {
             return true
         }
         image.isTemplate = false
+        cache[key] = image
         return image
+    }
+
+    static func accessibilityLabel(for state: OverallState) -> String {
+        switch state {
+        case .loading, .ok: return "Varlatch"
+        case .expiring: return "Varlatch, session expiring"
+        case .expired: return "Varlatch, session expired"
+        case .signedOut: return "Varlatch, not logged in"
+        case .cliMissing, .unsupported, .unavailable: return "Varlatch, CLI unavailable"
+        }
     }
 }

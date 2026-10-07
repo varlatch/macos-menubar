@@ -1,36 +1,34 @@
 import AppKit
+import Combine
 import notify
+import VarlatchKit
 
 /// Checks without synthetic input. With the `debugHooks` default on
 /// (`defaults write com.varlatch.menubar debugHooks -bool true`), the app
 /// writes its state to `debug-state.json` in its Application Support
-/// directory, and answers `notifyutil -p com.varlatch.menubar.debug.<name>`
-/// for these names: dump-state, open-panel, notify, login-on, login-off,
-/// badge-none, badge-warning, badge-error, settings.
+/// directory whenever it changes, and answers
+/// `notifyutil -p com.varlatch.menubar.debug.<name>` for these names:
+/// dump-state, open-panel, settings, refresh.
 @MainActor
 enum DebugHooks {
     static let prefix = "com.varlatch.menubar.debug."
     private static var tokens: [Int32] = []
+    private static var events: [String: [String]] = [:]
+    private static var subscriptions: Set<AnyCancellable> = []
 
     static var enabled: Bool { UserDefaults.standard.bool(forKey: "debugHooks") }
 
     static var stateURL: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return base.appendingPathComponent("com.varlatch.menubar/debug-state.json")
+        AppSupport.directory.appendingPathComponent("debug-state.json")
     }
 
     static func install() {
         guard enabled else { return }
         let actions: [String: @MainActor () -> Void] = [
-            "dump-state": { Task { await SpikeModel.shared.refreshNotificationStatus(); writeState() } },
-            "open-panel": { openPanel() },
-            "notify": { Task { await SpikeModel.shared.sendTestNotification() } },
-            "login-on": { SpikeModel.shared.setLaunchAtLogin(true) },
-            "login-off": { SpikeModel.shared.setLaunchAtLogin(false) },
-            "badge-none": { SpikeModel.shared.badge = .none; writeState() },
-            "badge-warning": { SpikeModel.shared.badge = .warning; writeState() },
-            "badge-error": { SpikeModel.shared.badge = .error; writeState() },
+            "dump-state": { writeState() },
+            "open-panel": { StatusItem.openPanel() },
             "settings": { SettingsOpener.open() },
+            "refresh": { Task { await AppController.shared.store.refresh() } },
         ]
         for (name, action) in actions {
             var token: Int32 = 0
@@ -39,12 +37,50 @@ enum DebugHooks {
             }
             tokens.append(token)
         }
+        // After each change has been applied.
+        AppController.shared.store.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { _ in writeState() }
+            .store(in: &subscriptions)
+        writeState()
+    }
+
+    /// Keeps the last values of something that happened, such as the
+    /// notifications posted, for the state file.
+    static func record(_ key: String, _ values: [String]) {
+        guard enabled else { return }
+        events[key, default: []].append(contentsOf: values)
+        writeState()
     }
 
     static func writeState() {
         guard enabled else { return }
-        var state = SpikeModel.shared.state()
-        state["writtenAt"] = ISO8601DateFormatter().string(from: Date())
+        let controller = AppController.shared
+        let store = controller.store
+        let now = Date()
+        var state: [String: Any] = [
+            "bundlePath": Bundle.main.bundlePath,
+            "environmentPATH": ProcessInfo.processInfo.environment["PATH"] ?? "",
+            "cliPath": store.cliPath ?? "",
+            "cliState": "\(store.cliState)",
+            "cliVersion": store.cliVersion?.description ?? "",
+            "overall": store.overall(now: now).rawValue,
+            "servers": store.servers.map { "\($0.server) \($0.health(now: now).rawValue): \(Sessions.detail(for: $0, now: now))" },
+            "hiddenServers": store.allServers.count - store.servers.count,
+            "menuBarItemShown": controller.menuBarItemShown,
+            "toolTip": StatusItem.button?.toolTip ?? "",
+            "panelOpen": StatusItem.isPanelOpen,
+            "notificationAuthorization": controller.notifier.authorization,
+            "launchMethod": "\(controller.loginItem.method)",
+            "loginItemStatus": controller.loginItem.status.rawValue,
+            "loginItemError": controller.loginItem.lastError,
+            "preferences": "\(store.preferences)",
+            "windows": NSApp.windows.filter(\.isVisible).map {
+                "\($0.className) frame=\(NSStringFromRect($0.frame))"
+            },
+            "writtenAt": ISO8601DateFormatter().string(from: now),
+        ]
+        for (key, values) in events { state[key] = Array(values.suffix(20)) }
         do {
             try FileManager.default.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             let data = try JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys])
@@ -53,24 +89,12 @@ enum DebugHooks {
             NSLog("Varlatch: cannot write debug state: \(error)")
         }
     }
+}
 
-    /// Opens the menu bar panel the way a click on the icon does, from inside
-    /// the app.
-    static func openPanel() {
-        for window in NSApp.windows where window.className.contains("StatusBarWindow") {
-            if let button = findStatusButton(in: window.contentView) {
-                button.performClick(nil)
-                return
-            }
-        }
-    }
-
-    private static func findStatusButton(in view: NSView?) -> NSStatusBarButton? {
-        guard let view else { return nil }
-        if let button = view as? NSStatusBarButton { return button }
-        for sub in view.subviews {
-            if let found = findStatusButton(in: sub) { return found }
-        }
-        return nil
+/// `~/Library/Application Support/com.varlatch.menubar/`.
+enum AppSupport {
+    static var directory: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("com.varlatch.menubar")
     }
 }

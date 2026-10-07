@@ -145,3 +145,37 @@ struct UpdateView: View {
         .padding(.vertical, 8)
     }
 }
+
+/// A newer copy of the app was installed while it runs (after `brew
+/// upgrade`): restart to use it.
+@MainActor
+struct AppUpdateView: View {
+    let title: String
+    @EnvironmentObject private var controller: AppController
+    /// Restarting would cancel a sign-in under way.
+    @EnvironmentObject private var signIn: SignInController
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .font(.system(size: 15))
+                .foregroundStyle(.green)
+                .frame(width: 20)
+            VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 12, weight: .medium))
+                    Text(signIn.isIdle ? "Restart Varlatch to use it." : "Restart once the sign-in has finished.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                Button("Restart") { controller.restartToUpdate() }
+                    .controlSize(.small)
+                    .disabled(!signIn.isIdle)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+    }
+}

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Restart after an upgrade:** after `brew upgrade varlatch-menubar` (or
+  a reinstall or rebuild in place), the panel shows that a newer copy is
+  installed, with **Restart**, and one notification offers **Restart
+  Now**. Restart waits while a sign-in is under way.
+
 ## 0.1.0 (2026-10-07)
 
 First release, installed with

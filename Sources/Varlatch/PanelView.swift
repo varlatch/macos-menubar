@@ -34,6 +34,10 @@ struct PanelView: View {
                             .padding(.bottom, 4)
                     }
                     content(now: context.date)
+                    if let update = controller.installedUpdate, let running = controller.runningApp {
+                        Divider().padding(.horizontal, 14).padding(.vertical, 4)
+                        AppUpdateView(title: AppUpdate.title(running: running, installed: update))
+                    }
                     if let version = controller.availableRelease {
                         Divider().padding(.horizontal, 14).padding(.vertical, 4)
                         UpdateView(version: version)

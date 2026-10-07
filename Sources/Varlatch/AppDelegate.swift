@@ -1,9 +1,24 @@
 import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var sigterm: DispatchSourceSignal?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         MainActor.assumeIsolated {
             AppController.shared.launch()
+        }
+        // SIGTERM (`kill`, launchd) quits like the Quit button, so a
+        // sign-in the app started does not outlive it.
+        signal(SIGTERM, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        source.setEventHandler { NSApp.terminate(nil) }
+        source.resume()
+        sigterm = source
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            AppController.shared.terminate()
         }
     }
 

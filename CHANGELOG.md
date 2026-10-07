@@ -12,5 +12,12 @@
   when opened from Finder, and runs it with a `PATH` that finds `node`.
 - Opens at login; a Homebrew install does so through a LaunchAgent that
   follows `brew upgrade`.
+- **Actions:** sign in, renew, and log out per server; **Verify**
+  (`varlatch status --probe`) with the results on the rows; **Open
+  Dashboard**. A sign-in runs without a terminal window: the panel shows it
+  waiting, with **Open Link** and **Cancel**, and the result arrives as a
+  notification. Quitting the app cancels it.
+- Expiry notifications have **Renew Now** or **Log In**.
+- After a full logout, **Log In** targets the last server used.
 - Settings: check interval, expiry notifications, showing the icon while
   logged out, and localhost servers.

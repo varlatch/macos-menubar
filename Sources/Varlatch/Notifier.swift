@@ -2,10 +2,22 @@ import AppKit
 @preconcurrency import UserNotifications
 import VarlatchKit
 
-/// Desktop notifications. Without permission the app works the same, just
-/// silently.
+/// Desktop notifications: expiry, with a button to renew or log in, and the
+/// outcome of sign-ins and logouts. Without permission the app works the
+/// same, just silently.
 @MainActor
 final class Notifier: NSObject, UNUserNotificationCenterDelegate {
+    enum Category {
+        static let expiring = "expiring"
+        static let expired = "expired"
+        static let outcome = "outcome"
+    }
+
+    enum Action {
+        static let renew = "renew"
+        static let login = "login"
+    }
+
     /// Notifications need the bundle identifier, so a bare `swift run` has none.
     private var center: UNUserNotificationCenter? {
         Bundle.main.bundleIdentifier == nil ? nil : UNUserNotificationCenter.current()
@@ -14,8 +26,20 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     private(set) var authorization = "unknown"
 
     func install() {
-        center?.delegate = self
+        guard let center else { return }
+        center.delegate = self
+        center.setNotificationCategories(categories())
         refreshAuthorization()
+    }
+
+    private func categories() -> Set<UNNotificationCategory> {
+        let renew = UNNotificationAction(identifier: Action.renew, title: "Renew Now")
+        let login = UNNotificationAction(identifier: Action.login, title: "Log In")
+        return [
+            UNNotificationCategory(identifier: Category.expiring, actions: [renew], intentIdentifiers: []),
+            UNNotificationCategory(identifier: Category.expired, actions: [login], intentIdentifiers: []),
+            UNNotificationCategory(identifier: Category.outcome, actions: [], intentIdentifiers: []),
+        ]
     }
 
     func requestPermission() {
@@ -39,22 +63,58 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    static func identifier(for server: String) -> String { "expiry:" + server }
+    // MARK: Posting
+
+    static func expiryIdentifier(for server: String) -> String { "expiry:" + server }
 
     func post(_ events: [ExpiryEvent]) {
-        guard let center else { return }
         for event in events {
             let content = UNMutableNotificationContent()
             content.title = event.title
             content.body = event.body()
-            content.userInfo = ["server": event.server, "health": event.health.rawValue]
+            content.categoryIdentifier = event.health == .expired ? Category.expired : Category.expiring
+            content.userInfo = ["server": event.server]
             content.threadIdentifier = "expiry"
             if event.health == .expired { content.sound = .default }
             // One per server: expired replaces expiring.
-            let request = UNNotificationRequest(identifier: Self.identifier(for: event.server), content: content, trigger: nil)
-            center.add(request)
+            deliver(Self.expiryIdentifier(for: event.server), content)
         }
         DebugHooks.record("notified", events.map { "\($0.health.rawValue) \($0.server)" })
+    }
+
+    func post(_ outcome: SignInController.Outcome) {
+        let content = UNMutableNotificationContent()
+        switch outcome {
+        case .signedIn: content.title = "Logged in"
+        case .cancelled: content.title = "Sign-in cancelled"
+        case .failed:
+            content.title = "Sign-in failed"
+            content.sound = .default
+        }
+        content.body = outcome.message
+        content.categoryIdentifier = Category.outcome
+        content.userInfo = ["server": outcome.server]
+        deliver("signin:" + outcome.server, content)
+        if case .signedIn = outcome { withdraw(Self.expiryIdentifier(for: outcome.server)) }
+        DebugHooks.record("notified", [outcome.message])
+    }
+
+    func postLogout(server: String, message: String, succeeded: Bool) {
+        let content = UNMutableNotificationContent()
+        content.title = succeeded ? "Logged out" : "Log out failed"
+        content.body = message
+        content.categoryIdentifier = Category.outcome
+        if !succeeded { content.sound = .default }
+        deliver("logout:" + server, content)
+        DebugHooks.record("notified", [message])
+    }
+
+    private func deliver(_ identifier: String, _ content: UNNotificationContent) {
+        center?.add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
+    }
+
+    private func withdraw(_ identifier: String) {
+        center?.removeDeliveredNotifications(withIdentifiers: [identifier])
     }
 
     /// Removes the expiry notifications of servers that are fine again or gone.
@@ -68,17 +128,29 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
+    // MARK: Answers
+
     // Show banners even while the panel is open.
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                             withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         completionHandler([.banner, .sound])
     }
 
-    // Clicking a notification opens the panel.
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                             withCompletionHandler completionHandler: @escaping () -> Void) {
+        let action = response.actionIdentifier
+        let server = response.notification.request.content.userInfo["server"] as? String
         Task { @MainActor in
-            if response.actionIdentifier == UNNotificationDefaultActionIdentifier { StatusItem.openPanel() }
+            DebugHooks.record("answered", [action + " " + (server ?? "")])
+            let controller = AppController.shared
+            switch action {
+            case Action.renew, Action.login:
+                if let server { controller.signIn(to: server) }
+            case UNNotificationDefaultActionIdentifier:
+                StatusItem.openPanel()
+            default:
+                break
+            }
             completionHandler()
         }
     }

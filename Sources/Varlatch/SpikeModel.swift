@@ -16,6 +16,8 @@ final class SpikeModel: ObservableObject {
     @Published var notificationStatus = "unknown"
     @Published var notificationError = ""
     @Published var lastNotificationAction = ""
+    @Published var deliveredNotifications: [String] = []
+    @Published var notificationSettings: [String: String] = [:]
     @Published var loginItemStatus = ""
     @Published var loginItemError = ""
 
@@ -44,6 +46,14 @@ final class SpikeModel: ObservableObject {
     func refreshNotificationStatus() async {
         guard notificationsAvailable else { notificationStatus = "no bundle identifier"; return }
         let settings = await UNUserNotificationCenter.current().notificationSettings()
+        notificationSettings = [
+            "alertStyle": "\(settings.alertStyle.rawValue)",
+            "alertSetting": "\(settings.alertSetting.rawValue)",
+            "notificationCenterSetting": "\(settings.notificationCenterSetting.rawValue)",
+            "soundSetting": "\(settings.soundSetting.rawValue)",
+        ]
+        let delivered = await UNUserNotificationCenter.current().deliveredNotifications()
+        deliveredNotifications = delivered.map { "\($0.date) \($0.request.content.body)" }
         switch settings.authorizationStatus {
         case .notDetermined: notificationStatus = "notDetermined"
         case .denied: notificationStatus = "denied"
@@ -136,6 +146,8 @@ final class SpikeModel: ObservableObject {
             "notificationStatus": notificationStatus,
             "notificationError": notificationError,
             "lastNotificationAction": lastNotificationAction,
+            "deliveredNotifications": deliveredNotifications,
+            "notificationSettings": notificationSettings,
             "loginItemStatus": loginItemStatus,
             "launchMethod": "\(launchMethod)",
             "loginItemError": loginItemError,

@@ -22,7 +22,7 @@ enum DebugHooks {
     static func install() {
         guard enabled else { return }
         let actions: [String: @MainActor () -> Void] = [
-            "dump-state": { writeState() },
+            "dump-state": { Task { await SpikeModel.shared.refreshNotificationStatus(); writeState() } },
             "open-panel": { openPanel() },
             "notify": { Task { await SpikeModel.shared.sendTestNotification() } },
             "login-on": { SpikeModel.shared.setLaunchAtLogin(true) },

@@ -31,8 +31,15 @@ final class AppController: ObservableObject {
     let loginItem = LoginItemController()
     /// Servers with a logout running.
     @Published private(set) var loggingOut: Set<String> = []
+    /// A newer copy of the app, installed while this one runs.
+    @Published private(set) var installedUpdate: BundleSnapshot?
+    /// This app as it was on disk when it started; nil for a bare build
+    /// without a bundle.
+    let runningApp = BundleSnapshot.read(bundleAt: Bundle.main.bundlePath)
+    private var notifiedUpdate: BundleSnapshot?
     private var subscriptions: Set<AnyCancellable> = []
     private var releaseTimer: Timer?
+    private var installTimer: Timer?
 
     private init() {
         UserDefaults.standard.register(defaults: Preferences.registrationDefaults)
@@ -79,6 +86,7 @@ final class AppController: ObservableObject {
             .sink { [weak self] _ in
                 let store = self?.store
                 Task { await store?.refresh() }
+                self?.checkInstalledUpdate()
             }
             .store(in: &subscriptions)
 
@@ -106,6 +114,14 @@ final class AppController: ObservableObject {
         }
         RunLoop.main.add(timer, forMode: .common)
         releaseTimer = timer
+        // A look at the installed copy is two file reads; once a minute.
+        let installTimer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
+            let controller = self
+            Task { @MainActor in controller?.checkInstalledUpdate() }
+        }
+        installTimer.tolerance = 10
+        RunLoop.main.add(installTimer, forMode: .common)
+        self.installTimer = installTimer
         Task {
             // After the first read of the CLI version.
             try? await Task.sleep(nanoseconds: 3_000_000_000)
@@ -202,12 +218,62 @@ final class AppController: ObservableObject {
     /// with release checks on, check again when the last one is over an
     /// hour old.
     func panelOpened() {
+        checkInstalledUpdate()
         Task {
             await store.refreshVersion()
             await store.refresh()
             checkReleases(maxAge: ReleaseRules.panelMaxAge)
             DebugHooks.writeState()
         }
+    }
+
+    // MARK: The app's own updates
+
+    /// Where the installed copy of this app is: Homebrew's opt link, or
+    /// this bundle.
+    var installedAppPath: String {
+        AppUpdate.installedPath(forBundlePath: Bundle.main.bundlePath)
+    }
+
+    /// Looks for a newer copy of the app installed while this one runs,
+    /// such as after `brew upgrade`, and notifies once per copy.
+    func checkInstalledUpdate() {
+        guard let runningApp else { return }
+        let pending = AppUpdate.pending(running: runningApp, installed: BundleSnapshot.read(bundleAt: installedAppPath))
+        if pending != installedUpdate { installedUpdate = pending }
+        if let pending, pending != notifiedUpdate {
+            notifiedUpdate = pending
+            notifier.postAppUpdate(title: AppUpdate.title(running: runningApp, installed: pending))
+        }
+    }
+
+    /// Quits, and opens the installed copy once this one is gone. With a
+    /// sign-in under way, shows the panel instead.
+    func restartToUpdate() {
+        guard installedUpdate != nil else { return }
+        guard signIn.isIdle else {
+            StatusItem.openPanel()
+            return
+        }
+        // A helper outlives the app: it waits (at most 10 seconds) for this
+        // process to exit, then opens the installed copy.
+        let helper = Process()
+        helper.executableURL = URL(fileURLWithPath: "/bin/sh")
+        helper.arguments = [
+            "-c",
+            #"i=0; while kill -0 "$1" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done; exec /usr/bin/open "$2""#,
+            "varlatch-restart", String(ProcessInfo.processInfo.processIdentifier), installedAppPath,
+        ]
+        helper.standardInput = FileHandle.nullDevice
+        helper.standardOutput = FileHandle.nullDevice
+        helper.standardError = FileHandle.nullDevice
+        do {
+            try helper.run()
+        } catch {
+            NSLog("Varlatch: cannot restart: \(error)")
+            return
+        }
+        NSApp.terminate(nil)
     }
 
     // MARK: The CLI and its updates

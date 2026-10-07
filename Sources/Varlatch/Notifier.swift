@@ -16,6 +16,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         static let failedDevice = "failed-device"
         static let release = "release"
         static let releaseUpdate = "release-update"
+        static let appUpdate = "app-update"
         static let outcome = "outcome"
     }
 
@@ -25,6 +26,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         static let device = "device"
         static let update = "update"
         static let notes = "notes"
+        static let restart = "restart"
     }
 
     /// Notifications need the bundle identifier, so a bare `swift run` has none.
@@ -55,6 +57,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             category(Category.expiringDevice, [renew, another]),
             category(Category.expiredDevice, [login, another]),
             category(Category.failedDevice, [useAnother]),
+            category(Category.appUpdate, [UNNotificationAction(identifier: Action.restart, title: "Restart Now")]),
             category(Category.release, [UNNotificationAction(identifier: Action.notes, title: "Release Notes")]),
             category(Category.releaseUpdate, [UNNotificationAction(identifier: Action.update, title: "Update"),
                                               UNNotificationAction(identifier: Action.notes, title: "Release Notes")]),
@@ -166,6 +169,16 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         DebugHooks.record("notified", ["[\(content.categoryIdentifier)] \(content.title)"])
     }
 
+    /// A newer copy of the app is installed: restart to use it.
+    func postAppUpdate(title: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = "Restart Varlatch to use it."
+        content.categoryIdentifier = Category.appUpdate
+        deliver("app-update", content)
+        DebugHooks.record("notified", ["[\(content.categoryIdentifier)] \(title)"])
+    }
+
     private func deliver(_ identifier: String, _ content: UNNotificationContent) {
         center?.add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
     }
@@ -206,6 +219,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                 if let server { controller.signIn(to: server) }
             case Action.device:
                 if let server { controller.signInFromAnotherDevice(to: server) }
+            case Action.restart:
+                controller.restartToUpdate()
             case Action.update:
                 if let version { controller.updateCLI(to: version) }
             case Action.notes:

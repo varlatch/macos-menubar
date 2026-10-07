@@ -11,7 +11,8 @@ import VarlatchKit
 /// dump-state, open-panel, settings, refresh, and these actions on the
 /// first server shown (or the one "Log In" would use): sign-in, device,
 /// cancel, verify, logout; quit; and check-releases (when the once-an-hour
-/// rule allows), install-cli (opens Terminal).
+/// rule allows), install-cli (opens Terminal), check-app-update, and
+/// restart (only with a newer copy installed).
 @MainActor
 enum DebugHooks {
     static let prefix = "com.varlatch.menubar.debug."
@@ -40,6 +41,8 @@ enum DebugHooks {
             "quit": { NSApp.terminate(nil) },
             "check-releases": { AppController.shared.checkReleases(maxAge: 0) },
             "install-cli": { AppController.shared.installCLI() },
+            "check-app-update": { AppController.shared.checkInstalledUpdate() },
+            "restart": { AppController.shared.restartToUpdate() },
         ]
         for (name, action) in actions {
             var token: Int32 = 0
@@ -95,6 +98,9 @@ enum DebugHooks {
             "deviceSignIn": controller.deviceSignIn,
             "cliInstall": controller.cliInstall.map { "\($0)" } ?? "",
             "availableRelease": controller.availableRelease?.description ?? "",
+            "runningApp": controller.runningApp.map { "\($0.displayVersion) at \($0.path)" } ?? "",
+            "installedUpdate": controller.installedUpdate.map { "\($0.displayVersion) at \($0.path)" } ?? "",
+            "processIdentifier": Int(ProcessInfo.processInfo.processIdentifier),
             "releaseCache": "\(controller.releases.cache)",
             "verifying": store.verifying,
             "verifyError": store.verifyError ?? "",

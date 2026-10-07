@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-10-07)
 
 - **Restart after an upgrade:** after `brew upgrade varlatch-menubar` (or
   a reinstall or rebuild in place), the panel shows that a newer copy is

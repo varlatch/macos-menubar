@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import VarlatchKit
 
@@ -43,5 +44,31 @@ struct CLILocatorTests {
         let locator = CLILocator(home: "/Users/me")
         let env = locator.environment(for: "/opt/homebrew/bin/varlatch", base: ["PATH": "/opt/homebrew/bin:/usr/bin"])
         #expect(env["PATH"] == "/opt/homebrew/bin:/usr/local/bin:/Users/me/.local/bin:/usr/bin")
+    }
+}
+
+struct LaunchAtLoginTests {
+    @Test func homebrewInstallUsesTheOptLink() {
+        let method = LaunchAtLoginMethod.method(
+            forBundlePath: "/opt/homebrew/Cellar/varlatch-menubar/0.1.0/Varlatch.app") { $0 == "/opt/homebrew/opt/varlatch-menubar/Varlatch.app" }
+        #expect(method == .launchAgent(appPath: "/opt/homebrew/opt/varlatch-menubar/Varlatch.app"))
+        let intel = LaunchAtLoginMethod.method(
+            forBundlePath: "/usr/local/Cellar/varlatch-menubar/HEAD-5bf2e94/Varlatch.app") { _ in true }
+        #expect(intel == .launchAgent(appPath: "/usr/local/opt/varlatch-menubar/Varlatch.app"))
+    }
+
+    @Test func elsewhereALoginItem() {
+        #expect(LaunchAtLoginMethod.method(forBundlePath: "/Applications/Varlatch.app") { _ in true } == .loginItem)
+        // No opt link: not a Homebrew keg after all.
+        #expect(LaunchAtLoginMethod.method(
+            forBundlePath: "/opt/homebrew/Cellar/varlatch-menubar/0.1.0/Varlatch.app") { _ in false } == .loginItem)
+    }
+
+    @Test func agentOpensTheApp() throws {
+        let data = LaunchAtLoginMethod.agentPlist(appPath: "/opt/homebrew/opt/varlatch-menubar/Varlatch.app")
+        let plist = try #require(try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+        #expect(plist["Label"] as? String == "com.varlatch.menubar.login")
+        #expect(plist["ProgramArguments"] as? [String] == ["/usr/bin/open", "-a", "/opt/homebrew/opt/varlatch-menubar/Varlatch.app"])
+        #expect(plist["RunAtLoad"] as? Bool == true)
     }
 }

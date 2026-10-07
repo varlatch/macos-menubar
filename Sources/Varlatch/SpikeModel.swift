@@ -79,8 +79,19 @@ final class SpikeModel: ObservableObject {
 
     // MARK: Launch at login
 
+    var launchMethod: LaunchAtLoginMethod { LaunchAtLoginMethod.method(forBundlePath: Bundle.main.bundlePath) }
+
     func refreshLoginItemStatus() {
-        switch SMAppService.mainApp.status {
+        let status: SMAppService.Status
+        switch launchMethod {
+        case .loginItem:
+            status = SMAppService.mainApp.status
+        case .launchAgent:
+            let url = LaunchAtLoginMethod.agentURL()
+            status = FileManager.default.fileExists(atPath: url.path)
+                ? SMAppService.statusForLegacyPlist(at: url) : .notRegistered
+        }
+        switch status {
         case .notRegistered: loginItemStatus = "notRegistered"
         case .enabled: loginItemStatus = "enabled"
         case .requiresApproval: loginItemStatus = "requiresApproval"
@@ -91,7 +102,18 @@ final class SpikeModel: ObservableObject {
 
     func setLaunchAtLogin(_ on: Bool) {
         do {
-            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+            switch launchMethod {
+            case .loginItem:
+                if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+            case .launchAgent(let appPath):
+                let url = LaunchAtLoginMethod.agentURL()
+                if on {
+                    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try LaunchAtLoginMethod.agentPlist(appPath: appPath).write(to: url, options: .atomic)
+                } else if FileManager.default.fileExists(atPath: url.path) {
+                    try FileManager.default.removeItem(at: url)
+                }
+            }
             loginItemError = ""
         } catch {
             loginItemError = error.localizedDescription
@@ -115,6 +137,7 @@ final class SpikeModel: ObservableObject {
             "notificationError": notificationError,
             "lastNotificationAction": lastNotificationAction,
             "loginItemStatus": loginItemStatus,
+            "launchMethod": "\(launchMethod)",
             "loginItemError": loginItemError,
             "windows": NSApp.windows.map { "\($0.className) visible=\($0.isVisible) frame=\(NSStringFromRect($0.frame)) screen=\(NSStringFromRect($0.screen?.frame ?? .zero))" },
         ]

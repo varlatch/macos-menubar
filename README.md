@@ -107,7 +107,13 @@ and newer; it checks the download and asks before replacing anything). A
 CLI built from a source checkout, or installed some other way, gets the
 release notes. A new release also triggers one notification.
 
-The app itself updates with Homebrew: `brew upgrade varlatch-menubar`.
+The app itself updates with Homebrew: `brew upgrade varlatch-menubar`. A
+running app keeps its old code until it is opened again, so it watches
+where it is installed (Homebrew's `opt` link, or its own bundle when
+installed some other way). Within a minute of an upgrade, or when you open
+the panel, it shows "Varlatch 0.2.0 is installed" with **Restart**, and one
+notification with **Restart Now**. Restart waits while a sign-in is under
+way, since quitting would cancel it.
 
 ## Privacy
 
@@ -190,7 +196,8 @@ On its first start the app asks to send notifications, opens its panel, and
 sets itself to open at login.
 
 **Upgrade** with `brew upgrade varlatch-menubar` (and `brew upgrade
-varlatch` for the CLI), then quit the app and open it again.
+varlatch` for the CLI). The app then offers to restart into the new
+version (from 0.2.0 on; quit and reopen 0.1.0 by hand).
 
 **Uninstall:** turn off **Open at login** in Settings first (or delete
 `~/Library/LaunchAgents/com.varlatch.menubar.login.plist`), quit the app,
@@ -245,8 +252,8 @@ It then keeps its state in
 `~/Library/Application Support/com.varlatch.menubar/debug-state.json` and
 answers `notifyutil -p com.varlatch.menubar.debug.<name>`, where `<name>` is
 `dump-state`, `open-panel`, `settings`, `refresh`, `sign-in`, `device`,
-`cancel`, `verify`, `logout`, `quit`, `check-releases`, or `install-cli`
-(the actions use the first server shown).
+`cancel`, `verify`, `logout`, `quit`, `check-releases`, `install-cli`,
+`check-app-update`, or `restart` (the actions use the first server shown).
 
 See [`CHANGELOG.md`](CHANGELOG.md) for what changed in each release.
 

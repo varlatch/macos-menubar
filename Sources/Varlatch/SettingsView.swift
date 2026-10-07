@@ -67,8 +67,12 @@ struct SettingsView: View {
                 }
                 Toggle("Check for new CLI releases", isOn: $checkUpdates)
             } footer: {
-                footnote("Leave the path empty to find the CLI in /opt/homebrew/bin, /usr/local/bin, or ~/.local/bin. "
-                         + "The release check asks GitHub for the latest release, anonymously, at most once an hour.")
+                VStack(alignment: .leading, spacing: 12) {
+                    footnote("Leave the path empty to find the CLI in /opt/homebrew/bin, /usr/local/bin, or ~/.local/bin. "
+                             + "The release check asks GitHub for the latest release, anonymously, at most once an hour.")
+                    footnote(Self.appVersion)
+                        .textSelection(.enabled)
+                }
             }
         }
         .formStyle(.grouped)
@@ -86,6 +90,14 @@ struct SettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshLoginStatus()
         }
+    }
+
+    /// "Varlatch for macOS 0.1.0 (97d7b10)".
+    static var appVersion: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let version = info["CFBundleShortVersionString"] as? String ?? "?"
+        let revision = (info["VarlatchSourceRevision"] as? String).flatMap { $0.isEmpty ? nil : " (\($0))" } ?? ""
+        return "Varlatch for macOS \(version)\(revision)"
     }
 
     private var cliSummary: String {

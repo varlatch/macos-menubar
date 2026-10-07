@@ -17,6 +17,13 @@
   Dashboard**. A sign-in runs without a terminal window: the panel shows it
   waiting, with **Open Link** and **Cancel**, and the result arrives as a
   notification. Quitting the app cancels it.
+- **Sign in from another device** (CLI 0.14.0 or newer), for when the
+  browser here has no passkey: the panel shows an address, a code, and a QR
+  code of the address. Start it with **Other Device** on a waiting sign-in,
+  **Sign In from Another Device** in a server's menu, or the buttons on a
+  failed sign-in's and the expiry notifications.
+- **Session length:** 1 to 24 hours, or the server's default of 12, for
+  every sign-in the app starts.
 - Expiry notifications have **Renew Now** or **Log In**.
 - After a full logout, **Log In** targets the last server used.
 - Settings: check interval, expiry notifications, showing the icon while

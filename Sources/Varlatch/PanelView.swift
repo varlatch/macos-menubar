@@ -26,7 +26,7 @@ struct PanelView: View {
                             .padding(.top, 6)
                     }
                     if signIn.state != .idle {
-                        PendingSignInView()
+                        PendingSignInView(now: context.date)
                             .padding(.horizontal, 10)
                             .padding(.top, 8)
                             .padding(.bottom, 4)
@@ -111,9 +111,15 @@ struct PanelView: View {
             MessageView(symbol: "person.crop.circle.badge.questionmark",
                         title: "Not logged in to \(Sessions.host(of: known))") {
                 if signIn.state == .idle {
-                    Button("Log In") { controller.signIn(to: known) }
-                        .controlSize(.small)
-                        .keyboardShortcut(.defaultAction)
+                    HStack {
+                        Button("Log In") { controller.signIn(to: known) }
+                            .keyboardShortcut(.defaultAction)
+                        if controller.deviceSignIn {
+                            Button("Other Device") { controller.signInFromAnotherDevice(to: known) }
+                                .help("Approve with a passkey on another device, such as a phone")
+                        }
+                    }
+                    .controlSize(.small)
                 }
             }
         } else {
@@ -161,16 +167,20 @@ struct PanelView: View {
     }
 }
 
-/// A sign-in waiting in the browser, with its link (for when the page
-/// opened in the wrong browser, or not at all) and a way to stop it.
+/// A sign-in under way. In the browser: the link, for when the page opened
+/// in the wrong browser (or not at all), and another device instead. From
+/// another device: the address, the code to type there, and a QR code of
+/// the address for a phone's camera.
 @MainActor
 struct PendingSignInView: View {
+    let now: Date
     @EnvironmentObject private var signIn: SignInController
     @EnvironmentObject private var controller: AppController
+    @State private var copied = false
 
     var body: some View {
-        if case .browser(let server, let link) = signIn.state {
-            VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
+            if let server = signIn.state.server {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
                     Text("Signing in to \(Sessions.host(of: server))")
@@ -178,21 +188,92 @@ struct PendingSignInView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
+            }
+            switch signIn.state {
+            case .idle:
+                EmptyView()
+            case .browser(let server, let link):
                 Text("Finish in your browser.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-                HStack {
-                    Spacer()
+                buttons {
                     Button("Open Link") { link.map(controller.open) }
                         .disabled(link == nil)
                         .help("Open the sign-in page again, for when it opened in the wrong browser")
-                    Button("Cancel") { controller.cancelSignIn() }
+                    if controller.deviceSignIn {
+                        Button("Other Device") { controller.signInFromAnotherDevice(to: server) }
+                            .help("Approve with a passkey on another device, such as a phone")
+                    }
                 }
-                .controlSize(.small)
+            case .device(_, nil):
+                Text("Getting a sign-in code…")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                buttons {}
+            case .device(_, let code?):
+                Text("On any device, such as a phone: open this address, sign in with your passkey, and enter the code.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .center, spacing: 12) {
+                    if let qr = QRCode.image(for: code.verificationUri) {
+                        Image(decorative: qr, scale: 1)
+                            .interpolation(.none)
+                            .resizable()
+                            .aspectRatio(1, contentMode: .fit)
+                            .frame(width: 96, height: 96)
+                            // A white quiet zone, whatever the appearance.
+                            .padding(8)
+                            .background(Color.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .accessibilityLabel("QR code of \(code.verificationUri)")
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(Self.displayAddress(code.verificationUri))
+                            .font(.system(size: 11))
+                            .lineLimit(2)
+                            .truncationMode(.middle)
+                            .textSelection(.enabled)
+                        Text(code.userCode)
+                            .font(.system(size: 22, weight: .semibold, design: .monospaced))
+                            .tracking(1)
+                            .textSelection(.enabled)
+                        Text(code.expiryText(now: now))
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                buttons {
+                    Button(copied ? "Copied" : "Copy Code") {
+                        controller.copy(code.userCode)
+                        copied = true
+                        Task {
+                            try? await Task.sleep(nanoseconds: 1_500_000_000)
+                            copied = false
+                        }
+                    }
+                    Button("Open Link") { controller.open(code.verificationUri) }
+                        .help("Open the address here, to approve in this browser")
+                }
             }
-            .padding(10)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.06)))
         }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.06)))
+    }
+
+    /// The buttons, then Cancel, on the right.
+    private func buttons<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        HStack {
+            Spacer()
+            content()
+            Button("Cancel") { controller.cancelSignIn() }
+        }
+        .controlSize(.small)
+    }
+
+    /// "vl.example.com/device": the address without its https://.
+    static func displayAddress(_ address: String) -> String {
+        address.hasPrefix("https://") ? String(address.dropFirst("https://".count)) : address
     }
 }
 
@@ -255,6 +336,10 @@ struct SessionRow: View {
 
     @ViewBuilder
     private var menuItems: some View {
+        if controller.deviceSignIn, signIn.state == .idle {
+            Button("Sign In from Another Device") { controller.signInFromAnotherDevice(to: server.server) }
+            Divider()
+        }
         Button("Open Dashboard") { controller.openDashboard(server.server) }
         Button("Copy Address") { controller.copy(server.server) }
         Divider()

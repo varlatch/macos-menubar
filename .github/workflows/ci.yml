@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Toolchains
+        run: |
+          sw_vers
+          ls -d /Library/Developer/CommandLineTools
+          DEVELOPER_DIR=/Library/Developer/CommandLineTools swift --version
+      - name: shellcheck
+        run: |
+          command -v shellcheck >/dev/null || brew install shellcheck
+          shellcheck scripts/*.sh
+      - name: Build the app with the Command Line Tools
+        env:
+          DEVELOPER_DIR: /Library/Developer/CommandLineTools
+        run: |
+          scripts/bundle.sh --version 0.0.0
+          codesign --verify --strict --verbose=1 build/Varlatch.app
+          plutil -extract CFBundleIdentifier raw build/Varlatch.app/Contents/Info.plist
+      - name: Tests
+        run: scripts/test.sh
+
+  # The oldest toolchain the app supports: Swift 5.10, as in the Command
+  # Line Tools for macOS 13.
+  swift-5:
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Build with Xcode 15.4 (Swift 5.10)
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_15.4.app/Contents/Developer
+        run: |
+          swift --version
+          scripts/bundle.sh --version 0.0.0

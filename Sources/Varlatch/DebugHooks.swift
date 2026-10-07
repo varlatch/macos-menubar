@@ -10,7 +10,8 @@ import VarlatchKit
 /// `notifyutil -p com.varlatch.menubar.debug.<name>` for these names:
 /// dump-state, open-panel, settings, refresh, and these actions on the
 /// first server shown (or the one "Log In" would use): sign-in, device,
-/// cancel, verify, logout; and quit.
+/// cancel, verify, logout; quit; and check-releases (when the once-an-hour
+/// rule allows), install-cli (opens Terminal).
 @MainActor
 enum DebugHooks {
     static let prefix = "com.varlatch.menubar.debug."
@@ -37,6 +38,8 @@ enum DebugHooks {
             "verify": { AppController.shared.verify() },
             "logout": { firstServer.map(AppController.shared.logout) },
             "quit": { NSApp.terminate(nil) },
+            "check-releases": { AppController.shared.checkReleases(maxAge: 0) },
+            "install-cli": { AppController.shared.installCLI() },
         ]
         for (name, action) in actions {
             var token: Int32 = 0
@@ -90,6 +93,9 @@ enum DebugHooks {
             "rememberedServers": store.memory.servers,
             "signIn": "\(controller.signIn.state)",
             "deviceSignIn": controller.deviceSignIn,
+            "cliInstall": controller.cliInstall.map { "\($0)" } ?? "",
+            "availableRelease": controller.availableRelease?.description ?? "",
+            "releaseCache": "\(controller.releases.cache)",
             "verifying": store.verifying,
             "verifyError": store.verifyError ?? "",
             "loggingOut": Array(controller.loggingOut),

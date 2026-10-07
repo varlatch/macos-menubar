@@ -26,5 +26,13 @@
   every sign-in the app starts.
 - Expiry notifications have **Renew Now** or **Log In**.
 - After a full logout, **Log In** targets the last server used.
-- Settings: check interval, expiry notifications, showing the icon while
-  logged out, and localhost servers.
+- **First run:** without the CLI, the panel offers to install it with
+  Homebrew in Terminal; with no server known, it asks for the server's
+  address. **Add Server** signs in to one more.
+- **CLI updates** (opt-in): an anonymous check for new releases, at most
+  once an hour, with **Release Notes** and **Update in Terminal**
+  (`brew upgrade varlatch`, or `varlatch self-update` for the release
+  build), and one notification per release.
+- Settings: session length, check interval, expiry notifications, showing
+  the icon while logged out, localhost servers, the CLI path, and release
+  checks.

@@ -9,6 +9,8 @@ struct PanelView: View {
     @EnvironmentObject private var store: SessionStore
     @EnvironmentObject private var signIn: SignInController
     @EnvironmentObject private var controller: AppController
+    /// The address form is open: "Add Server" or "Other Server".
+    @State private var connecting = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -32,6 +34,10 @@ struct PanelView: View {
                             .padding(.bottom, 4)
                     }
                     content(now: context.date)
+                    if let version = controller.availableRelease {
+                        Divider().padding(.horizontal, 14).padding(.vertical, 4)
+                        UpdateView(version: version)
+                    }
                 }
             }
             .padding(.vertical, 6)
@@ -41,6 +47,9 @@ struct PanelView: View {
         .frame(width: 340)
         .onAppear {
             controller.panelOpened()
+        }
+        .onDisappear {
+            connecting = false
         }
     }
 
@@ -81,28 +90,57 @@ struct PanelView: View {
         case .unknown:
             MessageView(symbol: "hourglass", title: "Reading sessions…")
         case .missing(let searched):
-            MessageView(symbol: "terminal", title: "The varlatch CLI was not found",
-                        detail: "Looked for it in " + Self.list(searched.map(Self.abbreviated)) + ".")
+            InstallCLIView(searched: searched)
         case .pathUnusable(let path):
             MessageView(symbol: "terminal", title: "The CLI set in Settings cannot run",
                         detail: Self.abbreviated(path), isError: true)
         case .unsupported:
-            MessageView(symbol: "exclamationmark.triangle", title: "This varlatch CLI is too old",
-                        detail: "It has no status command. Update the CLI to use it here.", isError: true)
+            if controller.cliInstall == .homebrew {
+                MessageView(symbol: "exclamationmark.triangle", title: "This varlatch CLI is too old",
+                            detail: "It has no status command. Update it: brew upgrade varlatch", isError: true) {
+                    Button("Update in Terminal") { controller.upgradeWithHomebrew() }
+                        .controlSize(.small)
+                }
+            } else {
+                MessageView(symbol: "exclamationmark.triangle", title: "This varlatch CLI is too old",
+                            detail: "It has no status command. Update the CLI to use it here.", isError: true)
+            }
         case .unavailable(let detail):
             MessageView(symbol: "exclamationmark.triangle", title: "The varlatch CLI did not answer",
                         detail: detail, isError: true)
         case .ready:
-            if store.servers.isEmpty {
-                signedOut
-            } else {
+            if !store.servers.isEmpty {
                 VStack(spacing: 0) {
                     ForEach(store.servers) { server in
                         SessionRow(server: server, probe: store.probe(for: server), now: now)
                     }
                 }
+            } else if store.knownServer != nil, !connectShown {
+                signedOut
+            }
+            if connectShown {
+                ConnectView(cancellable: !store.servers.isEmpty || store.knownServer != nil) { connecting = false }
+            } else if !store.servers.isEmpty, signIn.isIdle {
+                HStack {
+                    Spacer()
+                    Button {
+                        connecting = true
+                    } label: {
+                        Label("Add Server", systemImage: "plus")
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .help("Sign in to another Varlatch server")
+                }
+                .padding(.horizontal, 14)
+                .padding(.top, 2)
             }
         }
+    }
+
+    /// The address form: no server known yet, or one more asked for.
+    private var connectShown: Bool {
+        store.cliState == .ready && signIn.isIdle && (connecting || (store.servers.isEmpty && store.knownServer == nil))
     }
 
     @ViewBuilder
@@ -118,21 +156,26 @@ struct PanelView: View {
                             Button("Other Device") { controller.signInFromAnotherDevice(to: known) }
                                 .help("Approve with a passkey on another device, such as a phone")
                         }
+                        Button("Other Server") { connecting = true }
                     }
                     .controlSize(.small)
                 }
             }
-        } else {
-            MessageView(symbol: "person.crop.circle.badge.questionmark", title: "Not logged in",
-                        detail: "Sign in with: varlatch login --server <address>")
         }
     }
 
     private var footer: some View {
         HStack(spacing: 4) {
-            Text(verbatim: store.cliVersion.map { "CLI \($0.description)" } ?? " ")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+            Group {
+                if let version = store.cliVersion, let newer = controller.availableRelease {
+                    Text(verbatim: "CLI \(version) · ").foregroundColor(.secondary)
+                        + Text(verbatim: "\(newer) available").foregroundColor(.orange)
+                } else {
+                    Text(verbatim: store.cliVersion.map { "CLI \($0.description)" } ?? " ")
+                        .foregroundColor(.secondary)
+                }
+            }
+            .font(.system(size: 11))
             Spacer()
             SettingsOpener.Button {
                 Image(systemName: "gearshape")

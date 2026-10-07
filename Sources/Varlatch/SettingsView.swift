@@ -4,13 +4,18 @@ import VarlatchKit
 
 @MainActor
 struct SettingsView: View {
+    @EnvironmentObject private var store: SessionStore
     @AppStorage(Preferences.Key.launchAtLogin) private var launchAtLogin = true
     @AppStorage(Preferences.Key.refreshInterval) private var refreshInterval = Preferences.defaultRefreshInterval
     @AppStorage(Preferences.Key.notifyExpiry) private var notifyExpiry = true
     @AppStorage(Preferences.Key.showWhenLoggedOut) private var showWhenLoggedOut = true
     @AppStorage(Preferences.Key.showLocalhost) private var showLocalhost = false
     @AppStorage(Preferences.Key.sessionHours) private var sessionHours = 0
+    @AppStorage(Preferences.Key.cliPath) private var cliPath = ""
+    @AppStorage(Preferences.Key.checkUpdates) private var checkUpdates = false
     @State private var loginStatus = LoginItemController.Status.off
+    /// Edited here, applied on Return or Choose, not on every keystroke.
+    @State private var cliPathDraft = ""
 
     var body: some View {
         Form {
@@ -35,9 +40,7 @@ struct SettingsView: View {
                     }
                 }
             } footer: {
-                Text("How long a new sign-in lasts. Applies to every sign-in from this app, renewals included.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                footnote("How long a new sign-in lasts. Applies to every sign-in from this app, renewals included.")
             }
             Section {
                 Stepper(value: $refreshInterval, in: Preferences.minimumRefreshInterval...3600, step: 15) {
@@ -47,21 +50,81 @@ struct SettingsView: View {
                 Toggle("Show in the menu bar when logged out", isOn: $showWhenLoggedOut)
                 Toggle("Show localhost servers", isOn: $showLocalhost)
             } footer: {
-                Text("Checking sessions reads local files only; nothing goes over the network.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                footnote("Checking sessions reads local files only; nothing goes over the network.")
+            }
+            Section {
+                HStack {
+                    TextField("CLI path", text: $cliPathDraft, prompt: Text("Automatic"))
+                        .onSubmit { cliPath = cliPathDraft }
+                    Button("Choose…", action: choose)
+                }
+                LabeledContent("In use") {
+                    Text(cliSummary)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+                Toggle("Check for new CLI releases", isOn: $checkUpdates)
+            } footer: {
+                footnote("Leave the path empty to find the CLI in /opt/homebrew/bin, /usr/local/bin, or ~/.local/bin. "
+                         + "The release check asks GitHub for the latest release, anonymously, at most once an hour.")
             }
         }
         .formStyle(.grouped)
-        .frame(width: 460)
+        .frame(width: 480)
         .fixedSize(horizontal: false, vertical: true)
-        .onAppear(perform: refreshLoginStatus)
+        .onAppear {
+            cliPathDraft = cliPath
+            refreshLoginStatus()
+        }
+        .onChange(of: cliPath) { path in cliPathDraft = path }
         .onChange(of: launchAtLogin) { _ in
             // After the controller has applied it.
             Task { refreshLoginStatus() }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshLoginStatus()
+        }
+    }
+
+    private var cliSummary: String {
+        guard let path = store.cliPath else {
+            switch store.cliState {
+            case .pathUnusable: return "Cannot run the path above"
+            default: return "Not found"
+            }
+        }
+        let kind: String
+        switch CLIInstall.kind(of: path) {
+        case .homebrew: kind = "Homebrew"
+        case .release: kind = "release build"
+        case .checkout: kind = "source checkout"
+        case .custom: kind = "custom"
+        }
+        let version = store.cliVersion.map { " \($0)" } ?? ""
+        return "\(PanelView.abbreviated(path))\(version), \(kind)"
+    }
+
+    private func footnote(_ text: String) -> some View {
+        Text(text)
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func choose() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.showsHiddenFiles = true
+        panel.treatsFilePackagesAsDirectories = true
+        panel.message = "Choose the varlatch CLI"
+        panel.directoryURL = URL(fileURLWithPath: store.cliPath.map { ($0 as NSString).deletingLastPathComponent } ?? "/opt/homebrew/bin")
+        if panel.runModal() == .OK, let url = panel.url {
+            cliPath = url.path
+            cliPathDraft = url.path
         }
     }
 

@@ -44,7 +44,7 @@ struct SettingsView: View {
         .onAppear(perform: refreshLoginStatus)
         .onChange(of: launchAtLogin) { _ in
             // After the controller has applied it.
-            DispatchQueue.main.async(execute: refreshLoginStatus)
+            Task { refreshLoginStatus() }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshLoginStatus()

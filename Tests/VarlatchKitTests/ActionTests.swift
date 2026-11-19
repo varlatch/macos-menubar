@@ -33,7 +33,9 @@ struct SignInTests {
         controller.signIn(server: "https://vl.example.com", ttlArguments: ["--ttl", "28800"])
         #expect(controller.state == .browser(server: "https://vl.example.com", link: nil) || !controller.isIdle)
         let link = await waitForLink(controller)
-        #expect(link == "https://vl.example.com/enroll?callback=http%3A%2F%2F127.0.0.1%3A49152%2F")
+        // The link exactly as the CLI printed it, its own callback path included.
+        #expect(link != nil && link == fake.enrollLink)
+        #expect(link?.hasPrefix("https://vl.example.com/enroll?callback=") == true)
         await controller.waitUntilIdle()
         #expect(controller.isIdle)
         #expect(outcomes.list == [.signedIn(server: "https://vl.example.com", warning: nil)])
@@ -47,7 +49,8 @@ struct SignInTests {
         let (controller, _) = controller()
         #expect(controller.signIn(server: "https://vl.example.com") == nil)
         _ = await waitForLink(controller)
-        #expect(controller.signIn(server: "https://other.example.com")?.hasSuffix("/enroll?callback=http%3A%2F%2F127.0.0.1%3A49152%2F") == true)
+        let link = controller.signIn(server: "https://other.example.com")
+        #expect(link != nil && link == fake.enrollLink)
         await controller.waitUntilIdle()
         #expect(fake.calls.count == 1)
     }
@@ -105,6 +108,9 @@ struct SignInTests {
     @Test func enrollLink() {
         #expect(SignInController.enrollLink(in: "Complete passkey sign-in in your browser:\n  https://a.example.com/enroll?callback=x\n")
                 == "https://a.example.com/enroll?callback=x")
+        // The Go CLI's callback address ends in a path of its own: taken whole.
+        #expect(SignInController.enrollLink(in: "Complete passkey sign-in in your browser:\n  https://a.example.com/enroll?callback=http%3A%2F%2F127.0.0.1%3A49152%2FAbCdEfGhIjKlMnOpQrStUvWxYz012345\n")
+                == "https://a.example.com/enroll?callback=http%3A%2F%2F127.0.0.1%3A49152%2FAbCdEfGhIjKlMnOpQrStUvWxYz012345")
         #expect(SignInController.enrollLink(in: "Complete passkey sign-in in your browser:\n") == nil)
     }
 }
@@ -314,8 +320,12 @@ struct DeviceSignInTests {
 
     @Test func waitStates() {
         #expect(SignInController.waitState(#"{"state":"denied"}"#) == "denied")
-        #expect(SignInController.waitState("noise\n{\"state\":\"expired\"}\n") == "expired")
+        // As the CLI prints it (stdout holds the document alone; messages go to stderr).
+        #expect(SignInController.waitState("{\n  \"version\": 1,\n  \"state\": \"expired\"\n}\n") == "expired")
+        #expect(SignInController.waitState("{\r\n  \"version\": 1,\r\n  \"state\": \"denied\"\r\n}\r\n") == "denied")
         #expect(SignInController.waitState("") == nil)
+        #expect(SignInController.waitState("}") == nil)
+        #expect(SignInController.waitState(#"["denied"]"#) == nil)
     }
 }
 

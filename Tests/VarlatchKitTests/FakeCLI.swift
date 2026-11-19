@@ -32,6 +32,11 @@ struct FakeCLI {
         try! text.write(to: dir.appendingPathComponent("fake.env"), atomically: true, encoding: .utf8)
     }
 
+    /// The browser sign-in link the fake printed last.
+    var enrollLink: String? {
+        try? String(contentsOf: dir.appendingPathComponent("enroll-link"), encoding: .utf8)
+    }
+
     var calls: [String] {
         let text = (try? String(contentsOf: dir.appendingPathComponent("calls.log"), encoding: .utf8)) ?? ""
         return text.split(separator: "\n").map(String.init)

@@ -66,7 +66,8 @@ case "$mode" in
       exit 1
     fi
     expires=$(date -u -v+10M '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null || echo "2099-01-01T00:10:00.000Z")
-    echo "{\"verificationUri\":\"${server:-https://vl.example.com}/device\",\"userCode\":\"BCDF-GHJK\",\"expiresAt\":\"$expires\"}"
+    # Every --json document as the CLI prints it: indented by two spaces, version first.
+    printf '{\n  "version": 1,\n  "verificationUri": "%s/device",\n  "userCode": "BCDF-GHJK",\n  "expiresAt": "%s"\n}\n' "${server:-https://vl.example.com}" "$expires"
     ;;
   wait)
     n=$(cat "$dir/wait-count" 2>/dev/null || echo 0)
@@ -76,19 +77,25 @@ case "$mode" in
       pending-once)
         if [ "$n" -eq 1 ]; then
           sleep 1
-          echo '{"state":"pending"}'
+          printf '{\n  "version": 1,\n  "state": "pending"\n}\n'
           echo "varlatch login: not approved yet." >&2
           exit 75
         fi ;;
-      deny) echo '{"state":"denied"}'; echo "varlatch login: the sign-in was denied in the browser. Nothing was stored." >&2; exit 77 ;;
-      expire) echo '{"state":"expired"}'; echo "varlatch login: the sign-in expired before it was approved and collected (a code lasts 10 minutes). Nothing was stored." >&2; exit 77 ;;
+      deny) printf '{\n  "version": 1,\n  "state": "denied"\n}\n'; echo "varlatch login: the sign-in was denied in the browser. Nothing was stored." >&2; exit 77 ;;
+      expire) printf '{\n  "version": 1,\n  "state": "expired"\n}\n'; echo "varlatch login: the sign-in expired before it was approved and collected (a code lasts 10 minutes). Nothing was stored." >&2; exit 77 ;;
       hang) sleep 600; exit 75 ;;
     esac
-    echo '{"state":"signed-in","credentialId":"crd_test","expiresAt":"2099-01-01T12:00:00Z"}'
+    printf '{\n  "version": 1,\n  "state": "signed-in",\n  "credentialId": "crd_test",\n  "expiresAt": "2099-01-01T12:00:00Z"\n}\n'
     ;;
   browser)
+    # The callback address ends in a path of its own, different on every
+    # run (as the Go CLI prints it); the link printed is kept in
+    # enroll-link, so tests compare with it, never with a fixed text.
+    nonce=$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32)
+    link="${server:-https://vl.example.com}/enroll?callback=http%3A%2F%2F127.0.0.1%3A49152%2F$nonce"
+    printf '%s' "$link" > "$dir/enroll-link"
     echo "Complete passkey sign-in in your browser:"
-    echo "  ${server:-https://vl.example.com}/enroll?callback=http%3A%2F%2F127.0.0.1%3A49152%2F"
+    echo "  $link"
     sleep "${FAKE_LOGIN_SLEEP:-0}"
     if [ "${FAKE_LOGIN_RC:-0}" -ne 0 ]; then
       echo "varlatch login: browser sign-in failed: no passkey" >&2

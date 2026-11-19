@@ -220,10 +220,13 @@ public final class SignInController: ObservableObject {
         }
     }
 
-    /// The `state` in the last JSON line `--wait` printed.
+    /// The `state` in the JSON document `--wait` printed. The CLI prints it
+    /// indented over several lines, so the whole output is the document
+    /// (each `--wait` is its own process with its own output).
     static func waitState(_ stdout: String) -> String? {
-        guard let line = stdout.split(whereSeparator: \.isNewline).last,
-              let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { return nil }
+        let text = stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty,
+              let object = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else { return nil }
         return object["state"] as? String
     }
 

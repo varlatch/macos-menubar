@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1 (2026-11-20)
+
+- **Fix: a denied or expired sign-in from another device** showed as a
+  generic failure with the CLI's error lines. The CLI prints its answer as
+  JSON over several lines, and the app read only the last one. It now reads
+  the whole answer, so the notification says the sign-in was denied, or
+  that its code expired before it was approved.
+
 ## 0.2.0 (2026-10-07)
 
 - **Restart after an upgrade:** after `brew upgrade varlatch-menubar` (or

@@ -33,16 +33,21 @@ jobs:
       - name: Tests
         run: scripts/test.sh
 
-  # The oldest toolchain the app supports: Swift 5.10, as in the Command
-  # Line Tools for macOS 13.
+  # The oldest toolchain GitHub's runners still have. The app supports
+  # Swift 5.10 (the Command Line Tools for macOS 13, which the Homebrew
+  # formula builds with), but no hosted image runs that compiler any more:
+  # macos-14 is retired. This builds with the oldest Xcode on macos-15 in
+  # Swift 5 language mode (swift-tools-version 5.9); the macOS 13 deployment
+  # target keeps newer APIs out. Swift 5.10 itself is not built in CI.
   swift-5:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Build with Xcode 15.4 (Swift 5.10)
-        env:
-          DEVELOPER_DIR: /Applications/Xcode_15.4.app/Contents/Developer
+      - name: Build with the oldest Xcode on the image
         run: |
+          xcode=$(ls -d /Applications/Xcode_[0-9]*.app | sort -V | head -n 1)
+          echo "Using $xcode"
+          export DEVELOPER_DIR="$xcode/Contents/Developer"
           swift --version
           scripts/bundle.sh --version 0.0.0

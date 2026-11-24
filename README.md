@@ -104,12 +104,13 @@ With **Check for new CLI releases** on, the panel's footer shows when a
 newer CLI release is out, with **Release Notes** and, for a CLI the app
 knows how to update, **Update in Terminal**: `brew upgrade varlatch` for a
 Homebrew CLI, `varlatch self-update` for the native release CLI, or a
-checked update in Terminal for a pre-0.50 release file (which uses the
-release's verified `install.sh` from 0.50 and `self-update` before that;
-Varlatch 0.11.0 and newer). Each checks the download and asks before
-replacing anything. A CLI built from a source checkout, or installed some
-other way, gets the release notes. A new release also triggers one
-notification.
+checked update in Terminal for a pre-0.50 release file (which verifies
+`install.sh`'s SHA-256 against `SHA256SUMS` and runs its bootstrap from
+0.50, or `self-update` before that; Varlatch 0.11.0 and newer; install
+`cosign` for an independent signature check). Each checks the download
+against `SHA256SUMS` and asks before replacing anything. A CLI built from
+a source checkout, or installed some other way, gets the release notes. A
+new release also triggers one notification.
 
 The app itself updates with Homebrew: `brew upgrade varlatch-menubar`. A
 running app keeps its old code until it is opened again, so it watches

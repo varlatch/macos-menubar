@@ -36,7 +36,7 @@ public enum CLIUpdate {
 
     /// Command for updating a native CLI with its own `self-update`.
     /// Checks writability of the symlink-resolved file's directory because
-    /// `self-update` writes beside the real file.
+    /// the native `self-update` writes beside the real file.
     public static func selfUpdateCommand(path: String, version: Version, writable: Bool? = nil) -> String {
         let real = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
         let dir = (real as NSString).deletingLastPathComponent
@@ -47,12 +47,15 @@ public enum CLIUpdate {
     }
 
     /// Bash script for updating a pre-0.50 single-file CLI at `path` to
-    /// `version`. Inspects the release's `SHA256SUMS`: when it lists the
-    /// native macOS binary for this Mac, downloads `install.sh`, checks its
-    /// SHA-256 against `SHA256SUMS`, asks before replacing anything, keeps a
-    /// backup of the old CLI until the new one runs in place, and runs
-    /// `install.sh --version <v> --dir <dir>`. Otherwise hands off to the
-    /// CLI's own `self-update`.
+    /// `version`. Uses sudo based on the invoked path's directory (where both
+    /// `install.sh --dir` and the TypeScript `self-update` write). When the
+    /// target release lists a native macOS binary in `SHA256SUMS`, reads
+    /// `install.sh` into memory, hashes those exact bytes against
+    /// `SHA256SUMS`, checks for any Homebrew CLI on PATH before asking, backs
+    /// up the old CLI beside the target, pipes the verified bytes directly to
+    /// `[sudo] sh -s -- --version <v> --dir <dir>`, and checks that the target
+    /// runs afterwards (restoring the backup by one atomic `mv -f` if needed,
+    /// keeping the backup and printing its path if recovery fails).
     public static func installerScript(
         path: String,
         version: Version,
@@ -60,10 +63,7 @@ public enum CLIUpdate {
         needsSudo: Bool? = nil
     ) -> String {
         let dir = (path as NSString).deletingLastPathComponent
-        let real = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
-        let realDir = (real as NSString).deletingLastPathComponent
-        let installSudo = needsSudo ?? !FileManager.default.isWritableFile(atPath: dir)
-        let selfSudo = needsSudo ?? !FileManager.default.isWritableFile(atPath: realDir)
+        let useSudo = needsSudo ?? !FileManager.default.isWritableFile(atPath: dir)
         return """
             (
             set -euo pipefail
@@ -71,8 +71,7 @@ public enum CLIUpdate {
             dir=\(shellQuoted(dir))
             version=\(shellQuoted(version.description))
             repo=\(shellQuoted(repository))
-            install_sudo=\(installSudo ? "yes" : "no")
-            self_sudo=\(selfSudo ? "yes" : "no")
+            use_sudo=\(useSudo ? "yes" : "no")
             base="https://github.com/$repo/releases/download/v$version"
 
             case "$(uname -m)" in
@@ -95,16 +94,60 @@ public enum CLIUpdate {
               ' "$tmp/SHA256SUMS"
             }
 
-            sha256_file() {
+            sha256_stdin() {
               if command -v shasum >/dev/null 2>&1; then
-                shasum -a 256 "$1" | awk '{print $1}'
+                shasum -a 256 | awk '{print $1}'
               else
-                sha256sum "$1" | awk '{print $1}'
+                sha256sum | awk '{print $1}'
               fi
+            }
+
+            is_brew_path() {
+              local lower
+              lower=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+              case "$lower" in
+                /opt/homebrew|/opt/homebrew/*|/usr/local/homebrew|/usr/local/homebrew/*|/usr/local/cellar|/usr/local/cellar/*|/home/linuxbrew|/home/linuxbrew/*)
+                  return 0 ;;
+              esac
+              return 1
+            }
+
+            is_brew_entry() {
+              local entry=$1 resolved=""
+              [ -e "$entry" ] || [ -L "$entry" ] || return 1
+              is_brew_path "$entry" && return 0
+              if command -v python3 >/dev/null 2>&1; then
+                resolved=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$entry" 2>/dev/null || true)
+              elif command -v readlink >/dev/null 2>&1; then
+                resolved=$(readlink "$entry" 2>/dev/null || true)
+              fi
+              [ -n "$resolved" ] && is_brew_path "$resolved" && return 0
+              grep -aq 'installed with Homebrew' "$entry" 2>/dev/null && return 0
+              [ -n "$resolved" ] && grep -aq 'installed with Homebrew' "$resolved" 2>/dev/null && return 0
+              return 1
+            }
+
+            find_brew_on_path() {
+              local saved_ifs=$IFS entry=""
+              IFS=:
+              for entry in $PATH; do
+                if [ -n "$entry" ] && is_brew_entry "$entry/varlatch"; then
+                  IFS=$saved_ifs
+                  printf '%s' "$entry/varlatch"
+                  return 0
+                fi
+              done
+              IFS=$saved_ifs
+              return 1
             }
 
             native_asset="varlatch-$version-darwin-$arch"
             if listed_hash "$native_asset" >/dev/null 2>&1; then
+              if brew_cli=$(find_brew_on_path); then
+                echo "varlatch: found a Homebrew CLI at $brew_cli on your PATH; install.sh refuses to install alongside Homebrew. Update it with: brew upgrade varlatch" >&2
+                exit 1
+              fi
+
               want_install=$(listed_hash "install.sh") || {
                 echo "varlatch: SHA256SUMS does not list install.sh once; nothing was installed" >&2
                 exit 1
@@ -112,7 +155,12 @@ public enum CLIUpdate {
               curl -q -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 2 \\
                 -o "$tmp/install.sh" "$base/install.sh" \\
                 || { echo "varlatch: could not download install.sh for v$version" >&2; exit 1; }
-              got_install=$(sha256_file "$tmp/install.sh")
+
+              # Read the installer into memory (preserving trailing newlines),
+              # hash those exact bytes, and pipe those same bytes to sh.
+              script=$(cat "$tmp/install.sh"; printf x)
+              script=${script%x}
+              got_install=$(printf '%s' "$script" | sha256_stdin)
               if [ "$got_install" != "$want_install" ]; then
                 echo "varlatch: install.sh does not match SHA256SUMS; nothing was installed" >&2
                 exit 1
@@ -128,44 +176,65 @@ public enum CLIUpdate {
                 *) echo 'Nothing installed.'; exit 130 ;;
               esac
 
-              had_old=no
+              old=""
               if [ -e "$cli" ] || [ -L "$cli" ]; then
-                cp -Pp "$cli" "$tmp/old-varlatch"
-                had_old=yes
+                old="$dir/.varlatch-old.$$"
+                if [ "$use_sudo" = yes ]; then
+                  sudo cp -Pp "$cli" "$old" || { echo "varlatch: could not back up $cli; nothing was installed" >&2; exit 1; }
+                else
+                  cp -Pp "$cli" "$old" || { echo "varlatch: could not back up $cli; nothing was installed" >&2; exit 1; }
+                fi
               fi
+
+              restore_old() {
+                local reason=$1 code=$2
+                if [ -n "$old" ]; then
+                  if [ "$use_sudo" = yes ]; then
+                    if sudo mv -f "$old" "$cli"; then
+                      echo "varlatch: $reason; the old CLI is back." >&2
+                    else
+                      echo "varlatch: $reason, and the old CLI could not be restored automatically; backup kept at $old." >&2
+                    fi
+                  else
+                    if mv -f "$old" "$cli"; then
+                      echo "varlatch: $reason; the old CLI is back." >&2
+                    else
+                      echo "varlatch: $reason, and the old CLI could not be restored automatically; backup kept at $old." >&2
+                    fi
+                  fi
+                else
+                  echo "varlatch: $reason." >&2
+                fi
+                exit "$code"
+              }
 
               rc=0
-              if [ "$install_sudo" = yes ]; then
-                sudo sh "$tmp/install.sh" --version "$version" --dir "$dir" || rc=$?
+              if [ "$use_sudo" = yes ]; then
+                printf '%s' "$script" | sudo sh -s -- --version "$version" --dir "$dir" || rc=$?
               else
-                sh "$tmp/install.sh" --version "$version" --dir "$dir" || rc=$?
+                printf '%s' "$script" | sh -s -- --version "$version" --dir "$dir" || rc=$?
               fi
 
+              reported=$("$cli" --version 2>/dev/null || true)
               if [ "$rc" -ne 0 ]; then
-                if [ "$had_old" = yes ] && [ ! -e "$cli" ] && [ ! -L "$cli" ]; then
-                  if [ "$install_sudo" = yes ]; then sudo cp -Pp "$tmp/old-varlatch" "$cli"; else cp -Pp "$tmp/old-varlatch" "$cli"; fi
+                if [ -z "$reported" ]; then
+                  restore_old "update failed (exit $rc) and $cli does not run" "$rc"
+                fi
+                if [ -n "$old" ]; then
+                  if [ "$use_sudo" = yes ]; then sudo rm -f "$old"; else rm -f "$old"; fi
                 fi
                 exit "$rc"
               fi
 
-              reported=$("$cli" --version 2>/dev/null || true)
               case "$reported" in
                 "varlatch $version"|"varlatch $version "*) ;;
-                *)
-                  echo "varlatch: the new CLI does not run at $cli; putting the old CLI back." >&2
-                  if [ "$had_old" = yes ]; then
-                    if [ "$install_sudo" = yes ]; then
-                      sudo rm -f "$cli"
-                      sudo cp -Pp "$tmp/old-varlatch" "$cli"
-                    else
-                      rm -f "$cli"
-                      cp -Pp "$tmp/old-varlatch" "$cli"
-                    fi
-                  fi
-                  exit 1 ;;
+                *) restore_old "the new CLI does not run at $cli" 1 ;;
               esac
+              if [ -n "$old" ]; then
+                if [ "$use_sudo" = yes ]; then sudo rm -f "$old"; else rm -f "$old"; fi
+              fi
             elif listed_hash "varlatch-cli-$version.cjs" >/dev/null 2>&1; then
-              if [ "$self_sudo" = yes ]; then
+              if [ "$use_sudo" = yes ]; then
                 node_bin=$(command -v node) || { echo "varlatch: node was not found" >&2; exit 1; }
                 sudo "$node_bin" "$cli" self-update "$version"
               else

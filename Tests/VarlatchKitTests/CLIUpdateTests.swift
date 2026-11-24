@@ -271,6 +271,29 @@ struct CLIUpdateTests {
         #expect(try box.cliOutput() == "varlatch 0.23.0 (migration 0)")
     }
 
+    @Test func sudoDecisionMatchesDirectoryEachUpdaterWrites() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("vl-sudo-dir-\(UUID().uuidString)")
+        let roDir = root.appendingPathComponent("ro")
+        let rwDir = root.appendingPathComponent("rw")
+        try FileManager.default.createDirectory(at: roDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: rwDir, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: roDir.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let target = roDir.appendingPathComponent("varlatch-real")
+        try Data([0xcf, 0xfa, 0xed, 0xfe]).write(to: target)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: roDir.path)
+        let link = rwDir.appendingPathComponent("varlatch")
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: target.path)
+
+        let v = Version(0, 50, 0)
+        // Native updater writes beside the resolved file (roDir -> needs sudo).
+        #expect(CLIUpdate.selfUpdateCommand(path: link.path, version: v).hasPrefix("sudo "))
+        // TypeScript installer script writes to the invoked path's directory (rwDir -> no sudo).
+        #expect(CLIUpdate.installerScript(path: link.path, version: v).contains("use_sudo=no"))
+    }
+
     @Test func brokenReplacementRestoresOldCLI() throws {
         let box = try Sandbox()
         defer { box.cleanup() }
@@ -298,7 +321,63 @@ struct CLIUpdateTests {
 
         let res = try box.run(version: v, input: "y\n")
         #expect(res.exitCode != 0)
-        #expect(res.stderr.contains("putting the old CLI back"))
+        #expect(res.stderr.contains("the old CLI is back"))
+        #expect(try box.cliOutput() == "varlatch 0.23.0 (migration 0)")
+    }
+
+    @Test func failingInstallerThatCorruptsTargetStillRollsBack() throws {
+        let box = try Sandbox()
+        defer { box.cleanup() }
+        let v = Version(0, 50, 0)
+        let releaseDir = box.releasesDir.appendingPathComponent("v0.50.0")
+        let fakeInstall = """
+            #!/bin/sh
+            dir=""
+            while [ $# -gt 0 ]; do
+              case "$1" in
+                --dir) dir=$2; shift 2 ;;
+                --version) shift 2 ;;
+                *) shift ;;
+              esac
+            done
+            printf '#!/bin/sh\\nexit 126\\n' > "$dir/varlatch"
+            chmod 755 "$dir/varlatch"
+            exit 1
+            """
+        try box.writeFile(fakeInstall, to: releaseDir.appendingPathComponent("install.sh"))
+        let sums = """
+            \(String(repeating: "a", count: 64))  varlatch-0.50.0-darwin-\(box.hostArch())
+            \(box.sha256(fakeInstall))  install.sh
+            """
+        try box.writeFile(sums + "\n", to: releaseDir.appendingPathComponent("SHA256SUMS"))
+
+        let res = try box.run(version: v, input: "y\n")
+        #expect(res.exitCode != 0)
+        #expect(res.stderr.contains("the old CLI is back"))
+        #expect(try box.cliOutput() == "varlatch 0.23.0 (migration 0)")
+    }
+
+    @Test func homebrewOnPathWarnsBeforeAsking() throws {
+        let box = try Sandbox()
+        defer { box.cleanup() }
+        // Place a Homebrew-marked varlatch on PATH (in box.binDir).
+        try box.writeExecutable("#!/bin/sh\n# installed with Homebrew\necho 'varlatch 0.23.0'\n",
+                                to: box.binDir.appendingPathComponent("varlatch"))
+        let v = Version(0, 50, 0)
+        let releaseDir = box.releasesDir.appendingPathComponent("v0.50.0")
+        let fakeInstall = "#!/bin/sh\necho ran >> \(CLIUpdate.shellQuoted(box.logURL.path))\n"
+        try box.writeFile(fakeInstall, to: releaseDir.appendingPathComponent("install.sh"))
+        let sums = """
+            \(String(repeating: "a", count: 64))  varlatch-0.50.0-darwin-\(box.hostArch())
+            \(box.sha256(fakeInstall))  install.sh
+            """
+        try box.writeFile(sums + "\n", to: releaseDir.appendingPathComponent("SHA256SUMS"))
+
+        let res = try box.run(version: v, input: "")
+        #expect(res.exitCode != 0)
+        #expect(res.stderr.contains("brew upgrade varlatch"))
+        #expect(!res.stdout.contains("Install?"))
+        #expect(box.log().isEmpty)
         #expect(try box.cliOutput() == "varlatch 0.23.0 (migration 0)")
     }
 }

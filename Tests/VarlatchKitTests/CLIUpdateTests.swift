@@ -3,6 +3,7 @@ import Foundation
 import Testing
 @testable import VarlatchKit
 
+@Suite(.serialized)
 struct CLIUpdateTests {
     @Test func choosesTheRightUpdateWay() {
         let p = "/Users/example/.local/bin/varlatch"
@@ -28,7 +29,7 @@ struct CLIUpdateTests {
         #expect(CLIUpdate.way(kind: nil, path: p, version: v50, isNative: true) == .manual)
     }
 
-    @Test func selfUpdateCommandUsesSudoOnlyWhenRootSafeAndNeverNode() {
+    @Test func selfUpdateCommandUsesSudoOnlyWhenRootSafeAndNeverNode() async {
         let p = "/usr/local/bin/varlatch"
         let v = Version(0, 50, 0)
         let direct = CLIUpdate.selfUpdateCommand(path: p, version: v, writable: true)
@@ -41,9 +42,13 @@ struct CLIUpdateTests {
         #expect(!elevated.contains("node"))
 
         let refused = CLIUpdate.selfUpdateCommand(path: p, version: v, writable: false, rootSafe: { _ in false })
-        #expect(refused.contains("refusing to run sudo"))
-        #expect(refused.contains("'/usr/local/bin/varlatch' self-update '0.50.0'"))
-        #expect(refused.hasSuffix("exit 1"))
+        let res = await CLIProcess.run("/bin/sh", ["-c", refused],
+                                       environment: ProcessInfo.processInfo.environment,
+                                       timeout: 10)
+        #expect(res.exitCode == 1)
+        #expect(res.stderr.contains("refusing to run sudo"))
+        #expect(res.stderr.contains("'/usr/local/bin/varlatch' self-update '0.50.0'"))
+        #expect(!res.stderr.contains("node"))
     }
 
     // MARK: Installer script execution tests (fake curl + bash)
@@ -122,45 +127,49 @@ struct CLIUpdateTests {
             #endif
         }
 
-        func run(version: Version, input: String = "y\n", needsSudo: Bool = false) throws -> (exitCode: Int32, stdout: String, stderr: String) {
+        func run(version: Version, input: String = "y\n", needsSudo: Bool = false) async throws -> (exitCode: Int32, stdout: String, stderr: String) {
             let script = CLIUpdate.installerScript(path: cliURL.path, version: version, needsSudo: needsSudo)
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/bash")
-            process.arguments = ["-c", script]
-            var env = ProcessInfo.processInfo.environment
-            env["PATH"] = "\(binDir.path):\(env["PATH"] ?? "/usr/bin:/bin")"
-            env["FAKE_RELEASES"] = releasesDir.path
-            process.environment = env
-            let inPipe = Pipe()
-            let outPipe = Pipe()
-            let errPipe = Pipe()
-            process.standardInput = inPipe
-            process.standardOutput = outPipe
-            process.standardError = errPipe
-            try process.run()
-            if !input.isEmpty {
-                try? inPipe.fileHandleForWriting.write(contentsOf: Data(input.utf8))
+            let binPath = binDir.path
+            let releasesPath = releasesDir.path
+            return try await withCheckedThrowingContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    do {
+                        let process = Process()
+                        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+                        process.arguments = ["-c", script]
+                        var env = ProcessInfo.processInfo.environment
+                        env["PATH"] = "\(binPath):\(env["PATH"] ?? "/usr/bin:/bin")"
+                        env["FAKE_RELEASES"] = releasesPath
+                        process.environment = env
+                        let inPipe = Pipe()
+                        let outPipe = Pipe()
+                        let errPipe = Pipe()
+                        process.standardInput = inPipe
+                        process.standardOutput = outPipe
+                        process.standardError = errPipe
+                        try process.run()
+                        if !input.isEmpty {
+                            try? inPipe.fileHandleForWriting.write(contentsOf: Data(input.utf8))
+                        }
+                        try? inPipe.fileHandleForWriting.close()
+                        let outData = (try? outPipe.fileHandleForReading.readToEnd()) ?? Data()
+                        let errData = (try? errPipe.fileHandleForReading.readToEnd()) ?? Data()
+                        process.waitUntilExit()
+                        let out = String(decoding: outData, as: UTF8.self)
+                        let err = String(decoding: errData, as: UTF8.self)
+                        continuation.resume(returning: (process.terminationStatus, out, err))
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
             }
-            try? inPipe.fileHandleForWriting.close()
-            let outData = (try? outPipe.fileHandleForReading.readToEnd()) ?? Data()
-            let errData = (try? errPipe.fileHandleForReading.readToEnd()) ?? Data()
-            process.waitUntilExit()
-            let out = String(decoding: outData, as: UTF8.self)
-            let err = String(decoding: errData, as: UTF8.self)
-            return (process.terminationStatus, out, err)
         }
 
-        func cliOutput() throws -> String {
-            let process = Process()
-            process.executableURL = cliURL
-            process.arguments = ["--version"]
-            let outPipe = Pipe()
-            process.standardOutput = outPipe
-            try process.run()
-            let outData = (try? outPipe.fileHandleForReading.readToEnd()) ?? Data()
-            process.waitUntilExit()
-            return String(decoding: outData, as: UTF8.self)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+        func cliOutput() async -> String {
+            let res = await CLIProcess.run(cliURL.path, ["--version"],
+                                           environment: ProcessInfo.processInfo.environment,
+                                           timeout: 10)
+            return res.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
         func log() -> String {
@@ -172,7 +181,7 @@ struct CLIUpdateTests {
         }
     }
 
-    @Test func nativeReleaseRunsVerifiedInstallScript() throws {
+    @Test func nativeReleaseRunsVerifiedInstallScript() async throws {
         let box = try Sandbox()
         defer { box.cleanup() }
         let v = Version(0, 50, 0)
@@ -202,15 +211,15 @@ struct CLIUpdateTests {
             """
         try box.writeFile(sums + "\n", to: releaseDir.appendingPathComponent("SHA256SUMS"))
 
-        let res = try box.run(version: v, input: "y\n")
+        let res = try await box.run(version: v, input: "y\n")
         #expect(res.exitCode == 0)
         #expect(res.stdout.contains("checksum: ok (SHA256SUMS)"))
-        #expect(try box.cliOutput() == "varlatch 0.50.0")
+        #expect(await box.cliOutput() == "varlatch 0.50.0")
         #expect(box.log().contains("install.sh --version 0.50.0 --dir \(box.cliDir.path)"))
         #expect(!box.log().contains("old-cli"))
     }
 
-    @Test func nativeReleaseDeclinedLeavesOldCLI() throws {
+    @Test func nativeReleaseDeclinedLeavesOldCLI() async throws {
         let box = try Sandbox()
         defer { box.cleanup() }
         let v = Version(0, 50, 0)
@@ -223,13 +232,13 @@ struct CLIUpdateTests {
             """
         try box.writeFile(sums + "\n", to: releaseDir.appendingPathComponent("SHA256SUMS"))
 
-        let res = try box.run(version: v, input: "n\n")
+        let res = try await box.run(version: v, input: "n\n")
         #expect(res.exitCode == 130)
-        #expect(try box.cliOutput() == "varlatch 0.23.0 (migration 0)")
+        #expect(await box.cliOutput() == "varlatch 0.23.0 (migration 0)")
         #expect(box.log().isEmpty)
     }
 
-    @Test func pre050ReleaseRunsSelfUpdate() throws {
+    @Test func pre050ReleaseRunsSelfUpdate() async throws {
         let box = try Sandbox()
         defer { box.cleanup() }
         let v = Version(0, 24, 0)
@@ -237,12 +246,12 @@ struct CLIUpdateTests {
         let sums = "\(String(repeating: "b", count: 64))  varlatch-cli-0.24.0.cjs\n"
         try box.writeFile(sums, to: releaseDir.appendingPathComponent("SHA256SUMS"))
 
-        let res = try box.run(version: v)
+        let res = try await box.run(version: v)
         #expect(res.exitCode == 0)
         #expect(box.log().contains("old-cli self-update 0.24.0"))
     }
 
-    @Test func missingInstallScriptChecksumRefuses() throws {
+    @Test func missingInstallScriptChecksumRefuses() async throws {
         let box = try Sandbox()
         defer { box.cleanup() }
         let v = Version(0, 50, 0)
@@ -250,13 +259,13 @@ struct CLIUpdateTests {
         let sums = "\(String(repeating: "a", count: 64))  varlatch-0.50.0-darwin-\(box.hostArch())\n"
         try box.writeFile(sums, to: releaseDir.appendingPathComponent("SHA256SUMS"))
 
-        let res = try box.run(version: v)
+        let res = try await box.run(version: v)
         #expect(res.exitCode != 0)
         #expect(res.stderr.contains("install.sh"))
-        #expect(try box.cliOutput() == "varlatch 0.23.0 (migration 0)")
+        #expect(await box.cliOutput() == "varlatch 0.23.0 (migration 0)")
     }
 
-    @Test func mismatchingInstallScriptChecksumRefusesWithoutRunning() throws {
+    @Test func mismatchingInstallScriptChecksumRefusesWithoutRunning() async throws {
         let box = try Sandbox()
         defer { box.cleanup() }
         let v = Version(0, 50, 0)
@@ -269,11 +278,11 @@ struct CLIUpdateTests {
             """
         try box.writeFile(sums + "\n", to: releaseDir.appendingPathComponent("SHA256SUMS"))
 
-        let res = try box.run(version: v)
+        let res = try await box.run(version: v)
         #expect(res.exitCode != 0)
         #expect(res.stderr.contains("does not match SHA256SUMS"))
         #expect(box.log().isEmpty)
-        #expect(try box.cliOutput() == "varlatch 0.23.0 (migration 0)")
+        #expect(await box.cliOutput() == "varlatch 0.23.0 (migration 0)")
     }
 
     @Test func sudoDecisionMatchesDirectoryEachUpdaterWrites() throws {
@@ -301,7 +310,7 @@ struct CLIUpdateTests {
         #expect(CLIUpdate.installerScript(path: link.path, version: v).contains("use_sudo=no"))
     }
 
-    @Test func brokenReplacementRestoresOldCLI() throws {
+    @Test func brokenReplacementRestoresOldCLI() async throws {
         let box = try Sandbox()
         defer { box.cleanup() }
         let v = Version(0, 50, 0)
@@ -326,13 +335,13 @@ struct CLIUpdateTests {
             """
         try box.writeFile(sums + "\n", to: releaseDir.appendingPathComponent("SHA256SUMS"))
 
-        let res = try box.run(version: v, input: "y\n")
+        let res = try await box.run(version: v, input: "y\n")
         #expect(res.exitCode != 0)
         #expect(res.stderr.contains("the old CLI is back"))
-        #expect(try box.cliOutput() == "varlatch 0.23.0 (migration 0)")
+        #expect(await box.cliOutput() == "varlatch 0.23.0 (migration 0)")
     }
 
-    @Test func failingInstallerThatCorruptsTargetStillRollsBack() throws {
+    @Test func failingInstallerThatCorruptsTargetStillRollsBack() async throws {
         let box = try Sandbox()
         defer { box.cleanup() }
         let v = Version(0, 50, 0)
@@ -358,13 +367,13 @@ struct CLIUpdateTests {
             """
         try box.writeFile(sums + "\n", to: releaseDir.appendingPathComponent("SHA256SUMS"))
 
-        let res = try box.run(version: v, input: "y\n")
+        let res = try await box.run(version: v, input: "y\n")
         #expect(res.exitCode != 0)
         #expect(res.stderr.contains("the old CLI is back"))
-        #expect(try box.cliOutput() == "varlatch 0.23.0 (migration 0)")
+        #expect(await box.cliOutput() == "varlatch 0.23.0 (migration 0)")
     }
 
-    @Test func homebrewOnPathWarnsBeforeAsking() throws {
+    @Test func homebrewOnPathWarnsBeforeAsking() async throws {
         let box = try Sandbox()
         defer { box.cleanup() }
         // Place a Homebrew-marked varlatch on PATH (in box.binDir).
@@ -380,15 +389,15 @@ struct CLIUpdateTests {
             """
         try box.writeFile(sums + "\n", to: releaseDir.appendingPathComponent("SHA256SUMS"))
 
-        let res = try box.run(version: v, input: "")
+        let res = try await box.run(version: v, input: "")
         #expect(res.exitCode != 0)
         #expect(res.stderr.contains("brew upgrade varlatch"))
         #expect(!res.stdout.contains("Install?"))
         #expect(box.log().isEmpty)
-        #expect(try box.cliOutput() == "varlatch 0.23.0 (migration 0)")
+        #expect(await box.cliOutput() == "varlatch 0.23.0 (migration 0)")
     }
 
-    @Test func homebrewMultiHopSymlinkDetectedWithoutPython() throws {
+    @Test func homebrewMultiHopSymlinkDetectedWithoutPython() async throws {
         let box = try Sandbox()
         defer { box.cleanup() }
         // Stub python3 to fail loudly if invoked.
@@ -411,13 +420,13 @@ struct CLIUpdateTests {
             """
         try box.writeFile(sums + "\n", to: releaseDir.appendingPathComponent("SHA256SUMS"))
 
-        let res = try box.run(version: v, input: "")
+        let res = try await box.run(version: v, input: "")
         #expect(res.exitCode != 0)
         #expect(res.stderr.contains("brew upgrade varlatch"))
         #expect(box.log().isEmpty)
     }
 
-    @Test func nativeBinaryContainingHomebrewStringOnPathIsNotBlocked() throws {
+    @Test func nativeBinaryContainingHomebrewStringOnPathIsNotBlocked() async throws {
         let box = try Sandbox()
         defer { box.cleanup() }
         var bytes: [UInt8] = [0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0]
@@ -449,12 +458,12 @@ struct CLIUpdateTests {
             """
         try box.writeFile(sums + "\n", to: releaseDir.appendingPathComponent("SHA256SUMS"))
 
-        let res = try box.run(version: v, input: "y\n")
+        let res = try await box.run(version: v, input: "y\n")
         #expect(res.exitCode == 0)
-        #expect(try box.cliOutput() == "varlatch 0.50.0")
+        #expect(await box.cliOutput() == "varlatch 0.50.0")
     }
 
-    @Test func nonZeroVersionExitWithMatchingStdoutRestoresOldCLI() throws {
+    @Test func nonZeroVersionExitWithMatchingStdoutRestoresOldCLI() async throws {
         let box = try Sandbox()
         defer { box.cleanup() }
         let v = Version(0, 50, 0)
@@ -480,14 +489,14 @@ struct CLIUpdateTests {
             """
         try box.writeFile(sums + "\n", to: releaseDir.appendingPathComponent("SHA256SUMS"))
 
-        let res = try box.run(version: v, input: "y\n")
+        let res = try await box.run(version: v, input: "y\n")
         #expect(res.exitCode != 0)
         #expect(res.stderr.contains("exited 2"))
         #expect(res.stderr.contains("the old CLI is back"))
-        #expect(try box.cliOutput() == "varlatch 0.23.0 (migration 0)")
+        #expect(await box.cliOutput() == "varlatch 0.23.0 (migration 0)")
     }
 
-    @Test func cosignVerifiesManifestBeforeRunningInstaller() throws {
+    @Test func cosignVerifiesManifestBeforeRunningInstaller() async throws {
         let box = try Sandbox()
         defer { box.cleanup() }
         let fakeCosign = """
@@ -533,16 +542,16 @@ struct CLIUpdateTests {
             """
         try box.writeFile(sums + "\n", to: releaseDir.appendingPathComponent("SHA256SUMS"))
 
-        let res = try box.run(version: v, input: "y\n")
+        let res = try await box.run(version: v, input: "y\n")
         #expect(res.exitCode == 0)
         let log = box.log()
         let cosignIdx = try #require(log.range(of: "cosign verify-blob")?.lowerBound)
         let installIdx = try #require(log.range(of: "install.sh")?.lowerBound)
         #expect(cosignIdx < installIdx)
-        #expect(try box.cliOutput() == "varlatch 0.50.0")
+        #expect(await box.cliOutput() == "varlatch 0.50.0")
     }
 
-    @Test func cosignFailureRefusesWithoutRunningInstaller() throws {
+    @Test func cosignFailureRefusesWithoutRunningInstaller() async throws {
         let box = try Sandbox()
         defer { box.cleanup() }
         try box.writeExecutable("#!/bin/sh\nexit 1\n", to: box.binDir.appendingPathComponent("cosign"))
@@ -558,14 +567,14 @@ struct CLIUpdateTests {
             """
         try box.writeFile(sums + "\n", to: releaseDir.appendingPathComponent("SHA256SUMS"))
 
-        let res = try box.run(version: v, input: "y\n")
+        let res = try await box.run(version: v, input: "y\n")
         #expect(res.exitCode != 0)
         #expect(res.stderr.contains("cosign signature verification"))
         #expect(box.log().isEmpty)
-        #expect(try box.cliOutput() == "varlatch 0.23.0 (migration 0)")
+        #expect(await box.cliOutput() == "varlatch 0.23.0 (migration 0)")
     }
 
-    @Test func cosignMissingBundleRefusesWithoutRunningInstaller() throws {
+    @Test func cosignMissingBundleRefusesWithoutRunningInstaller() async throws {
         let box = try Sandbox()
         defer { box.cleanup() }
         try box.writeExecutable("#!/bin/sh\nexit 0\n", to: box.binDir.appendingPathComponent("cosign"))
@@ -580,14 +589,14 @@ struct CLIUpdateTests {
             """
         try box.writeFile(sums + "\n", to: releaseDir.appendingPathComponent("SHA256SUMS"))
 
-        let res = try box.run(version: v, input: "y\n")
+        let res = try await box.run(version: v, input: "y\n")
         #expect(res.exitCode != 0)
         #expect(res.stderr.contains("SHA256SUMS.sigstore.json"))
         #expect(box.log().isEmpty)
-        #expect(try box.cliOutput() == "varlatch 0.23.0 (migration 0)")
+        #expect(await box.cliOutput() == "varlatch 0.23.0 (migration 0)")
     }
 
-    @Test func installerScriptRefusesSudoOnNonRootDir() throws {
+    @Test func installerScriptRefusesSudoOnNonRootDir() async throws {
         let box = try Sandbox()
         defer { box.cleanup() }
         let v = Version(0, 50, 0)
@@ -600,10 +609,10 @@ struct CLIUpdateTests {
             """
         try box.writeFile(sums + "\n", to: releaseDir.appendingPathComponent("SHA256SUMS"))
 
-        let res = try box.run(version: v, input: "y\n", needsSudo: true)
+        let res = try await box.run(version: v, input: "y\n", needsSudo: true)
         #expect(res.exitCode != 0)
         #expect(res.stderr.contains("refusing to run sudo"))
         #expect(box.log().isEmpty)
-        #expect(try box.cliOutput() == "varlatch 0.23.0 (migration 0)")
+        #expect(await box.cliOutput() == "varlatch 0.23.0 (migration 0)")
     }
 }

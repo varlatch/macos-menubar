@@ -73,6 +73,14 @@ struct CLIInstallTests {
         #expect(CLIInstall.kind(of: wrapper) == .homebrew)
     }
 
+    @Test func nativeBinaryContainingHomebrewStringIsNotHomebrew() {
+        var data: [UInt8] = [0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0]
+        data.append(contentsOf: Array("installed with Homebrew".utf8))
+        let bin = bytes("local/bin/varlatch-with-msg", data)
+        #expect(CLIInstall.kind(of: bin) == .release)
+        #expect(CLIInstall.isNative(bin))
+    }
+
     @Test func releaseBuild() {
         let path = file("local/bin/varlatch", "#!/usr/bin/env node\n/*! Varlatch CLI. Copyright 2026 Robotsson. */\n")
         #expect(CLIInstall.kind(of: path) == .release)

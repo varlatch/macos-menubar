@@ -74,16 +74,16 @@ public struct Version: Comparable, Equatable, CustomStringConvertible, Sendable 
         let pb = b.suffix.split(separator: ".")
         for (sa, sb) in zip(pa, pb) {
             if sa == sb { continue }
-            let na = sa.unicodeScalars.allSatisfy(isDigit) ? UInt64(sa) : nil
-            let nb = sb.unicodeScalars.allSatisfy(isDigit) ? UInt64(sb) : nil
-            switch (na, nb) {
-            case let (va?, vb?):
-                if va != vb { return va < vb }
-            case (.some, .none):
-                return true
-            case (.none, .some):
-                return false
-            case (.none, .none):
+            let aNum = !sa.isEmpty && sa.unicodeScalars.allSatisfy(isDigit)
+            let bNum = !sb.isEmpty && sb.unicodeScalars.allSatisfy(isDigit)
+            if aNum && bNum {
+                let ta = sa.drop(while: { $0 == "0" })
+                let tb = sb.drop(while: { $0 == "0" })
+                if ta.count != tb.count { return ta.count < tb.count }
+                if ta != tb { return ta < tb }
+            } else if aNum != bNum {
+                return aNum
+            } else {
                 return sa < sb
             }
         }

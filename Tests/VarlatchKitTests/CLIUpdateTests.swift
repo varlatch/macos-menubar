@@ -28,7 +28,7 @@ struct CLIUpdateTests {
         #expect(CLIUpdate.way(kind: nil, path: p, version: v50, isNative: true) == .manual)
     }
 
-    @Test func selfUpdateCommandUsesSudoOnlyWhenNeededAndNeverNode() {
+    @Test func selfUpdateCommandUsesSudoOnlyWhenRootSafeAndNeverNode() {
         let p = "/usr/local/bin/varlatch"
         let v = Version(0, 50, 0)
         let direct = CLIUpdate.selfUpdateCommand(path: p, version: v, writable: true)
@@ -36,9 +36,14 @@ struct CLIUpdateTests {
         #expect(!direct.contains("sudo"))
         #expect(!direct.contains("node"))
 
-        let elevated = CLIUpdate.selfUpdateCommand(path: p, version: v, writable: false)
+        let elevated = CLIUpdate.selfUpdateCommand(path: p, version: v, writable: false, rootSafe: { _ in true })
         #expect(elevated == "sudo '/usr/local/bin/varlatch' self-update '0.50.0'")
         #expect(!elevated.contains("node"))
+
+        let refused = CLIUpdate.selfUpdateCommand(path: p, version: v, writable: false, rootSafe: { _ in false })
+        #expect(refused.contains("refusing to run sudo"))
+        #expect(refused.contains("'/usr/local/bin/varlatch' self-update '0.50.0'"))
+        #expect(refused.hasSuffix("exit 1"))
     }
 
     // MARK: Installer script execution tests (fake curl + bash)
@@ -117,8 +122,8 @@ struct CLIUpdateTests {
             #endif
         }
 
-        func run(version: Version, input: String = "y\n") throws -> (exitCode: Int32, stdout: String, stderr: String) {
-            let script = CLIUpdate.installerScript(path: cliURL.path, version: version, needsSudo: false)
+        func run(version: Version, input: String = "y\n", needsSudo: Bool = false) throws -> (exitCode: Int32, stdout: String, stderr: String) {
+            let script = CLIUpdate.installerScript(path: cliURL.path, version: version, needsSudo: needsSudo)
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/bin/bash")
             process.arguments = ["-c", script]
@@ -288,8 +293,10 @@ struct CLIUpdateTests {
         try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: target.path)
 
         let v = Version(0, 50, 0)
-        // Native updater writes beside the resolved file (roDir -> needs sudo).
-        #expect(CLIUpdate.selfUpdateCommand(path: link.path, version: v).hasPrefix("sudo "))
+        // Native updater writes beside the resolved file (roDir -> needs sudo,
+        // and only elevates when the target and directory are root-safe).
+        #expect(CLIUpdate.selfUpdateCommand(path: link.path, version: v, rootSafe: { _ in true }).hasPrefix("sudo "))
+        #expect(CLIUpdate.selfUpdateCommand(path: link.path, version: v).contains("refusing to run sudo"))
         // TypeScript installer script writes to the invoked path's directory (rwDir -> no sudo).
         #expect(CLIUpdate.installerScript(path: link.path, version: v).contains("use_sudo=no"))
     }
@@ -377,6 +384,225 @@ struct CLIUpdateTests {
         #expect(res.exitCode != 0)
         #expect(res.stderr.contains("brew upgrade varlatch"))
         #expect(!res.stdout.contains("Install?"))
+        #expect(box.log().isEmpty)
+        #expect(try box.cliOutput() == "varlatch 0.23.0 (migration 0)")
+    }
+
+    @Test func homebrewMultiHopSymlinkDetectedWithoutPython() throws {
+        let box = try Sandbox()
+        defer { box.cleanup() }
+        // Stub python3 to fail loudly if invoked.
+        try box.writeExecutable("#!/bin/sh\necho python-called >> \(CLIUpdate.shellQuoted(box.logURL.path))\nexit 99\n",
+                                to: box.binDir.appendingPathComponent("python3"))
+        let target = box.root.appendingPathComponent("real-brew/varlatch")
+        try box.writeExecutable("#!/bin/sh\n# installed with Homebrew\necho 'varlatch 0.23.0'\n", to: target)
+        let hop1 = box.root.appendingPathComponent("hop1")
+        try FileManager.default.createSymbolicLink(atPath: hop1.path, withDestinationPath: target.path)
+        let link = box.binDir.appendingPathComponent("varlatch")
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: hop1.path)
+
+        let v = Version(0, 50, 0)
+        let releaseDir = box.releasesDir.appendingPathComponent("v0.50.0")
+        let fakeInstall = "#!/bin/sh\necho ran >> \(CLIUpdate.shellQuoted(box.logURL.path))\n"
+        try box.writeFile(fakeInstall, to: releaseDir.appendingPathComponent("install.sh"))
+        let sums = """
+            \(String(repeating: "a", count: 64))  varlatch-0.50.0-darwin-\(box.hostArch())
+            \(box.sha256(fakeInstall))  install.sh
+            """
+        try box.writeFile(sums + "\n", to: releaseDir.appendingPathComponent("SHA256SUMS"))
+
+        let res = try box.run(version: v, input: "")
+        #expect(res.exitCode != 0)
+        #expect(res.stderr.contains("brew upgrade varlatch"))
+        #expect(box.log().isEmpty)
+    }
+
+    @Test func nativeBinaryContainingHomebrewStringOnPathIsNotBlocked() throws {
+        let box = try Sandbox()
+        defer { box.cleanup() }
+        var bytes: [UInt8] = [0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0]
+        bytes.append(contentsOf: Array("installed with Homebrew\n".utf8))
+        let binOnPath = box.binDir.appendingPathComponent("varlatch")
+        try Data(bytes).write(to: binOnPath)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binOnPath.path)
+
+        let v = Version(0, 50, 0)
+        let releaseDir = box.releasesDir.appendingPathComponent("v0.50.0")
+        let fakeInstall = """
+            #!/bin/sh
+            dir=""
+            ver=""
+            while [ $# -gt 0 ]; do
+              case "$1" in
+                --dir) dir=$2; shift 2 ;;
+                --version) ver=$2; shift 2 ;;
+                *) shift ;;
+              esac
+            done
+            printf '#!/bin/sh\\necho "varlatch %s"\\n' "$ver" > "$dir/varlatch"
+            chmod 755 "$dir/varlatch"
+            """
+        try box.writeFile(fakeInstall, to: releaseDir.appendingPathComponent("install.sh"))
+        let sums = """
+            \(String(repeating: "a", count: 64))  varlatch-0.50.0-darwin-\(box.hostArch())
+            \(box.sha256(fakeInstall))  install.sh
+            """
+        try box.writeFile(sums + "\n", to: releaseDir.appendingPathComponent("SHA256SUMS"))
+
+        let res = try box.run(version: v, input: "y\n")
+        #expect(res.exitCode == 0)
+        #expect(try box.cliOutput() == "varlatch 0.50.0")
+    }
+
+    @Test func nonZeroVersionExitWithMatchingStdoutRestoresOldCLI() throws {
+        let box = try Sandbox()
+        defer { box.cleanup() }
+        let v = Version(0, 50, 0)
+        let releaseDir = box.releasesDir.appendingPathComponent("v0.50.0")
+        let fakeInstall = """
+            #!/bin/sh
+            dir=""
+            ver=""
+            while [ $# -gt 0 ]; do
+              case "$1" in
+                --dir) dir=$2; shift 2 ;;
+                --version) ver=$2; shift 2 ;;
+                *) shift ;;
+              esac
+            done
+            printf '#!/bin/sh\\necho "varlatch %s"\\nexit 2\\n' "$ver" > "$dir/varlatch"
+            chmod 755 "$dir/varlatch"
+            """
+        try box.writeFile(fakeInstall, to: releaseDir.appendingPathComponent("install.sh"))
+        let sums = """
+            \(String(repeating: "a", count: 64))  varlatch-0.50.0-darwin-\(box.hostArch())
+            \(box.sha256(fakeInstall))  install.sh
+            """
+        try box.writeFile(sums + "\n", to: releaseDir.appendingPathComponent("SHA256SUMS"))
+
+        let res = try box.run(version: v, input: "y\n")
+        #expect(res.exitCode != 0)
+        #expect(res.stderr.contains("exited 2"))
+        #expect(res.stderr.contains("the old CLI is back"))
+        #expect(try box.cliOutput() == "varlatch 0.23.0 (migration 0)")
+    }
+
+    @Test func cosignVerifiesManifestBeforeRunningInstaller() throws {
+        let box = try Sandbox()
+        defer { box.cleanup() }
+        let fakeCosign = """
+            #!/bin/sh
+            echo "cosign $*" >> \(CLIUpdate.shellQuoted(box.logURL.path))
+            id=""
+            iss=""
+            while [ $# -gt 0 ]; do
+              case "$1" in
+                --certificate-identity) id=$2; shift 2 ;;
+                --certificate-oidc-issuer) iss=$2; shift 2 ;;
+                *) shift ;;
+              esac
+            done
+            [ "$id" = "https://github.com/varlatch/varlatch/.github/workflows/release.yml@refs/tags/v0.50.0" ] || exit 1
+            [ "$iss" = "https://token.actions.githubusercontent.com" ] || exit 1
+            exit 0
+            """
+        try box.writeExecutable(fakeCosign, to: box.binDir.appendingPathComponent("cosign"))
+
+        let v = Version(0, 50, 0)
+        let releaseDir = box.releasesDir.appendingPathComponent("v0.50.0")
+        let fakeInstall = """
+            #!/bin/sh
+            echo "install.sh $*" >> \(CLIUpdate.shellQuoted(box.logURL.path))
+            dir=""
+            ver=""
+            while [ $# -gt 0 ]; do
+              case "$1" in
+                --dir) dir=$2; shift 2 ;;
+                --version) ver=$2; shift 2 ;;
+                *) shift ;;
+              esac
+            done
+            printf '#!/bin/sh\\necho "varlatch %s"\\n' "$ver" > "$dir/varlatch"
+            chmod 755 "$dir/varlatch"
+            """
+        try box.writeFile(fakeInstall, to: releaseDir.appendingPathComponent("install.sh"))
+        try box.writeFile("{}", to: releaseDir.appendingPathComponent("SHA256SUMS.sigstore.json"))
+        let sums = """
+            \(String(repeating: "a", count: 64))  varlatch-0.50.0-darwin-\(box.hostArch())
+            \(box.sha256(fakeInstall))  install.sh
+            """
+        try box.writeFile(sums + "\n", to: releaseDir.appendingPathComponent("SHA256SUMS"))
+
+        let res = try box.run(version: v, input: "y\n")
+        #expect(res.exitCode == 0)
+        let log = box.log()
+        let cosignIdx = try #require(log.range(of: "cosign verify-blob")?.lowerBound)
+        let installIdx = try #require(log.range(of: "install.sh")?.lowerBound)
+        #expect(cosignIdx < installIdx)
+        #expect(try box.cliOutput() == "varlatch 0.50.0")
+    }
+
+    @Test func cosignFailureRefusesWithoutRunningInstaller() throws {
+        let box = try Sandbox()
+        defer { box.cleanup() }
+        try box.writeExecutable("#!/bin/sh\nexit 1\n", to: box.binDir.appendingPathComponent("cosign"))
+
+        let v = Version(0, 50, 0)
+        let releaseDir = box.releasesDir.appendingPathComponent("v0.50.0")
+        let fakeInstall = "#!/bin/sh\necho bad-ran >> \(CLIUpdate.shellQuoted(box.logURL.path))\n"
+        try box.writeFile(fakeInstall, to: releaseDir.appendingPathComponent("install.sh"))
+        try box.writeFile("{}", to: releaseDir.appendingPathComponent("SHA256SUMS.sigstore.json"))
+        let sums = """
+            \(String(repeating: "a", count: 64))  varlatch-0.50.0-darwin-\(box.hostArch())
+            \(box.sha256(fakeInstall))  install.sh
+            """
+        try box.writeFile(sums + "\n", to: releaseDir.appendingPathComponent("SHA256SUMS"))
+
+        let res = try box.run(version: v, input: "y\n")
+        #expect(res.exitCode != 0)
+        #expect(res.stderr.contains("cosign signature verification"))
+        #expect(box.log().isEmpty)
+        #expect(try box.cliOutput() == "varlatch 0.23.0 (migration 0)")
+    }
+
+    @Test func cosignMissingBundleRefusesWithoutRunningInstaller() throws {
+        let box = try Sandbox()
+        defer { box.cleanup() }
+        try box.writeExecutable("#!/bin/sh\nexit 0\n", to: box.binDir.appendingPathComponent("cosign"))
+
+        let v = Version(0, 50, 0)
+        let releaseDir = box.releasesDir.appendingPathComponent("v0.50.0")
+        let fakeInstall = "#!/bin/sh\necho bad-ran >> \(CLIUpdate.shellQuoted(box.logURL.path))\n"
+        try box.writeFile(fakeInstall, to: releaseDir.appendingPathComponent("install.sh"))
+        let sums = """
+            \(String(repeating: "a", count: 64))  varlatch-0.50.0-darwin-\(box.hostArch())
+            \(box.sha256(fakeInstall))  install.sh
+            """
+        try box.writeFile(sums + "\n", to: releaseDir.appendingPathComponent("SHA256SUMS"))
+
+        let res = try box.run(version: v, input: "y\n")
+        #expect(res.exitCode != 0)
+        #expect(res.stderr.contains("SHA256SUMS.sigstore.json"))
+        #expect(box.log().isEmpty)
+        #expect(try box.cliOutput() == "varlatch 0.23.0 (migration 0)")
+    }
+
+    @Test func installerScriptRefusesSudoOnNonRootDir() throws {
+        let box = try Sandbox()
+        defer { box.cleanup() }
+        let v = Version(0, 50, 0)
+        let releaseDir = box.releasesDir.appendingPathComponent("v0.50.0")
+        let fakeInstall = "#!/bin/sh\necho bad-ran >> \(CLIUpdate.shellQuoted(box.logURL.path))\n"
+        try box.writeFile(fakeInstall, to: releaseDir.appendingPathComponent("install.sh"))
+        let sums = """
+            \(String(repeating: "a", count: 64))  varlatch-0.50.0-darwin-\(box.hostArch())
+            \(box.sha256(fakeInstall))  install.sh
+            """
+        try box.writeFile(sums + "\n", to: releaseDir.appendingPathComponent("SHA256SUMS"))
+
+        let res = try box.run(version: v, input: "y\n", needsSudo: true)
+        #expect(res.exitCode != 0)
+        #expect(res.stderr.contains("refusing to run sudo"))
         #expect(box.log().isEmpty)
         #expect(try box.cliOutput() == "varlatch 0.23.0 (migration 0)")
     }

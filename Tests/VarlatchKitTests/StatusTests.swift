@@ -227,6 +227,9 @@ struct VersionTests {
         #expect(Version(0, 13, 9) < Version.deviceSignIn)
         #expect(Version(0, 16, 0, suffix: "rc.1") < Version(0, 16, 0))
         #expect(Version(0, 50, 0, suffix: "rc.9") < Version(0, 50, 0, suffix: "rc.10"))
+        #expect(Version(0, 50, 0, suffix: "rc.99999999999999999999999") < Version(0, 50, 0, suffix: "rc.100000000000000000000000"))
+        #expect(Version(0, 50, 0, suffix: "rc.007") == Version(0, 50, 0, suffix: "rc.007"))
+        #expect(Version(0, 50, 0, suffix: "rc.07") < Version(0, 50, 0, suffix: "rc.10"))
         #expect(Version(1, 0, 0) > Version(0, 99, 99))
     }
 }

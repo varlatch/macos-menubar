@@ -57,7 +57,11 @@ public enum CLIInstall: Equatable, Sendable {
     private static func hasHomebrewMarker(_ path: String) -> Bool {
         guard let handle = FileHandle(forReadingAtPath: path) else { return false }
         defer { try? handle.close() }
-        let head = String(decoding: handle.readData(ofLength: 512), as: UTF8.self)
+        let data = handle.readData(ofLength: 512)
+        // Only check script files starting with "#!" so a native binary's own
+        // error strings never trigger the legacy Homebrew wrapper marker.
+        guard data.count >= 2, data[0] == 0x23, data[1] == 0x21 else { return false }
+        let head = String(decoding: data, as: UTF8.self)
         return head.contains("installed with Homebrew")
     }
 

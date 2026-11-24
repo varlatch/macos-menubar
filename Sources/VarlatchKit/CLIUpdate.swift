@@ -34,28 +34,53 @@ public enum CLIUpdate {
         "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
+    /// Whether `path` is owned by root (uid 0) and not group- or other-writable.
+    public static func isRootSafe(_ path: String, fileManager: FileManager = .default) -> Bool {
+        guard let attrs = try? fileManager.attributesOfItem(atPath: path),
+              let uid = attrs[.ownerAccountID] as? NSNumber,
+              let perms = attrs[.posixPermissions] as? NSNumber else { return false }
+        return uid.intValue == 0 && (perms.uint16Value & 0o022) == 0
+    }
+
     /// Command for updating a native CLI with its own `self-update`.
     /// Checks writability of the symlink-resolved file's directory because
-    /// the native `self-update` writes beside the real file.
-    public static func selfUpdateCommand(path: String, version: Version, writable: Bool? = nil) -> String {
+    /// the native `self-update` writes beside the real file. Only elevates
+    /// the resolved executable when both the resolved file and its directory
+    /// are root-owned and not group- or other-writable; otherwise refuses and
+    /// prints the command to run by hand.
+    public static func selfUpdateCommand(
+        path: String,
+        version: Version,
+        writable: Bool? = nil,
+        rootSafe: ((String) -> Bool)? = nil
+    ) -> String {
         let real = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
         let dir = (real as NSString).deletingLastPathComponent
         let canWrite = writable ?? FileManager.default.isWritableFile(atPath: dir)
-        let quoted = shellQuoted(path)
+        let quotedReal = shellQuoted(real)
         let ver = shellQuoted(version.description)
-        return canWrite ? "\(quoted) self-update \(ver)" : "sudo \(quoted) self-update \(ver)"
+        if canWrite {
+            return "\(quotedReal) self-update \(ver)"
+        }
+        let checkSafe = rootSafe ?? { isRootSafe($0) }
+        if checkSafe(real) && checkSafe(dir) {
+            return "sudo \(quotedReal) self-update \(ver)"
+        }
+        let manual = "\(quotedReal) self-update \(ver)"
+        let msg = "varlatch: refusing to run sudo on \(real) (must be root-owned and not group- or other-writable). Run by hand: \(manual)"
+        return "printf '%s\\n' \(shellQuoted(msg)) >&2; exit 1"
     }
 
     /// Bash script for updating a pre-0.50 single-file CLI at `path` to
-    /// `version`. Uses sudo based on the invoked path's directory (where both
-    /// `install.sh --dir` and the TypeScript `self-update` write). When the
-    /// target release lists a native macOS binary in `SHA256SUMS`, reads
-    /// `install.sh` into memory, hashes those exact bytes against
-    /// `SHA256SUMS`, checks for any Homebrew CLI on PATH before asking, backs
-    /// up the old CLI beside the target, pipes the verified bytes directly to
-    /// `[sudo] sh -s -- --version <v> --dir <dir>`, and checks that the target
-    /// runs afterwards (restoring the backup by one atomic `mv -f` if needed,
-    /// keeping the backup and printing its path if recovery fails).
+    /// `version`. Uses sudo based on the invoked path's directory (and only
+    /// when root-owned and not group- or other-writable; else refuses with the
+    /// manual command). When `cosign` is installed, verifies `SHA256SUMS`'s
+    /// signature (pinned identity and OIDC issuer) before the manifest
+    /// authorizes `install.sh`. Reads `install.sh` into memory, hashes those
+    /// exact bytes, pipes them to `[sudo] sh -s -- --version <v> --dir <dir>`,
+    /// checks both exit status 0 and expected version before removing the
+    /// backup, and traps INT/TERM/HUP after backup through atomic `mv -f`
+    /// recovery.
     public static func installerScript(
         path: String,
         version: Version,
@@ -81,7 +106,75 @@ public enum CLIUpdate {
             esac
 
             tmp=$(mktemp -d)
-            trap 'rm -rf "$tmp"' EXIT
+            old=""
+            install_started=no
+            verified=no
+
+            restore_old_once() {
+              local reason=$1
+              if [ -n "$old" ] && { [ -e "$old" ] || [ -L "$old" ]; }; then
+                if [ "$use_sudo" = yes ]; then
+                  if sudo mv -f "$old" "$cli"; then
+                    old=""
+                    echo "varlatch: $reason; the old CLI is back." >&2
+                  else
+                    echo "varlatch: $reason, and the old CLI could not be restored automatically; backup kept at $old." >&2
+                  fi
+                else
+                  if mv -f "$old" "$cli"; then
+                    old=""
+                    echo "varlatch: $reason; the old CLI is back." >&2
+                  else
+                    echo "varlatch: $reason, and the old CLI could not be restored automatically; backup kept at $old." >&2
+                  fi
+                fi
+              else
+                echo "varlatch: $reason." >&2
+              fi
+            }
+
+            cleanup() {
+              rm -rf "$tmp"
+              if [ "$verified" != yes ]; then
+                if [ "$install_started" = yes ]; then
+                  restore_old_once "update interrupted or did not complete"
+                elif [ -n "$old" ]; then
+                  if [ "$use_sudo" = yes ]; then sudo rm -f "$old" 2>/dev/null || true; else rm -f "$old" 2>/dev/null || true; fi
+                fi
+              fi
+            }
+            trap cleanup EXIT
+            trap 'exit 129' HUP
+            trap 'exit 130' INT
+            trap 'exit 143' TERM
+
+            is_root_safe() {
+              local p=$1 info uid mode
+              [ -e "$p" ] || return 1
+              if [ "$(uname -s)" = Darwin ]; then
+                info=$(stat -f '%u %Lp' "$p" 2>/dev/null) || return 1
+              else
+                info=$(stat -c '%u %a' "$p" 2>/dev/null) || return 1
+              fi
+              uid=${info%% *}; mode=${info#* }
+              [ "$uid" = "0" ] && [ $((8#$mode & 8#022)) -eq 0 ]
+            }
+
+            # Full symlink resolution in pure sh (up to 40 hops), no python.
+            resolve_path() {
+              local p=$1 hops=0 pdir link
+              while [ -L "$p" ] && [ "$hops" -lt 40 ]; do
+                pdir=$(dirname "$p")
+                link=$(readlink "$p") || break
+                case "$link" in
+                  /*) p=$link ;;
+                  *) p="$pdir/$link" ;;
+                esac
+                hops=$((hops + 1))
+              done
+              pdir=$(cd "$(dirname "$p")" 2>/dev/null && pwd -P) || { printf '%s' "$p"; return 0; }
+              printf '%s/%s' "${pdir%/}" "$(basename "$p")"
+            }
 
             curl -q -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 2 \\
               -o "$tmp/SHA256SUMS" "$base/SHA256SUMS" \\
@@ -112,18 +205,20 @@ public enum CLIUpdate {
               return 1
             }
 
+            has_brew_marker() {
+              [ -f "$1" ] || return 1
+              [ "$(head -c 2 "$1" 2>/dev/null || true)" = "#!" ] || return 1
+              head -c 512 "$1" 2>/dev/null | grep -aq 'installed with Homebrew'
+            }
+
             is_brew_entry() {
               local entry=$1 resolved=""
               [ -e "$entry" ] || [ -L "$entry" ] || return 1
               is_brew_path "$entry" && return 0
-              if command -v python3 >/dev/null 2>&1; then
-                resolved=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$entry" 2>/dev/null || true)
-              elif command -v readlink >/dev/null 2>&1; then
-                resolved=$(readlink "$entry" 2>/dev/null || true)
-              fi
+              resolved=$(resolve_path "$entry")
               [ -n "$resolved" ] && is_brew_path "$resolved" && return 0
-              grep -aq 'installed with Homebrew' "$entry" 2>/dev/null && return 0
-              [ -n "$resolved" ] && grep -aq 'installed with Homebrew' "$resolved" 2>/dev/null && return 0
+              has_brew_marker "$entry" && return 0
+              [ -n "$resolved" ] && has_brew_marker "$resolved" && return 0
               return 1
             }
 
@@ -146,6 +241,26 @@ public enum CLIUpdate {
               if brew_cli=$(find_brew_on_path); then
                 echo "varlatch: found a Homebrew CLI at $brew_cli on your PATH; install.sh refuses to install alongside Homebrew. Update it with: brew upgrade varlatch" >&2
                 exit 1
+              fi
+
+              if [ "$use_sudo" = yes ]; then
+                if ! is_root_safe "$dir" || { [ -e "$cli" ] && [ ! -L "$cli" ] && ! is_root_safe "$cli"; }; then
+                  echo "varlatch: refusing to run sudo on $dir (must be root-owned and not group- or other-writable). Update by hand using install.sh --version $version --dir $dir" >&2
+                  exit 1
+                fi
+              fi
+
+              # When cosign is installed, verify SHA256SUMS's Sigstore signature
+              # before the manifest authorizes install.sh; any failure stops.
+              if command -v cosign >/dev/null 2>&1; then
+                curl -q -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 2 \\
+                  -o "$tmp/SHA256SUMS.sigstore.json" "$base/SHA256SUMS.sigstore.json" \\
+                  || { echo "varlatch: cosign is installed, but SHA256SUMS.sigstore.json could not be downloaded; nothing was installed" >&2; exit 1; }
+                cosign verify-blob "$tmp/SHA256SUMS" \\
+                  --bundle "$tmp/SHA256SUMS.sigstore.json" \\
+                  --certificate-identity "https://github.com/$repo/.github/workflows/release.yml@refs/tags/v$version" \\
+                  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" >/dev/null 2>&1 \\
+                  || { echo "varlatch: cosign signature verification of SHA256SUMS failed; nothing was installed" >&2; exit 1; }
               fi
 
               want_install=$(listed_hash "install.sh") || {
@@ -176,38 +291,16 @@ public enum CLIUpdate {
                 *) echo 'Nothing installed.'; exit 130 ;;
               esac
 
-              old=""
               if [ -e "$cli" ] || [ -L "$cli" ]; then
                 old="$dir/.varlatch-old.$$"
                 if [ "$use_sudo" = yes ]; then
-                  sudo cp -Pp "$cli" "$old" || { echo "varlatch: could not back up $cli; nothing was installed" >&2; exit 1; }
+                  sudo cp -Pp "$cli" "$old" || { old=""; echo "varlatch: could not back up $cli; nothing was installed" >&2; exit 1; }
                 else
-                  cp -Pp "$cli" "$old" || { echo "varlatch: could not back up $cli; nothing was installed" >&2; exit 1; }
+                  cp -Pp "$cli" "$old" || { old=""; echo "varlatch: could not back up $cli; nothing was installed" >&2; exit 1; }
                 fi
               fi
 
-              restore_old() {
-                local reason=$1 code=$2
-                if [ -n "$old" ]; then
-                  if [ "$use_sudo" = yes ]; then
-                    if sudo mv -f "$old" "$cli"; then
-                      echo "varlatch: $reason; the old CLI is back." >&2
-                    else
-                      echo "varlatch: $reason, and the old CLI could not be restored automatically; backup kept at $old." >&2
-                    fi
-                  else
-                    if mv -f "$old" "$cli"; then
-                      echo "varlatch: $reason; the old CLI is back." >&2
-                    else
-                      echo "varlatch: $reason, and the old CLI could not be restored automatically; backup kept at $old." >&2
-                    fi
-                  fi
-                else
-                  echo "varlatch: $reason." >&2
-                fi
-                exit "$code"
-              }
-
+              install_started=yes
               rc=0
               if [ "$use_sudo" = yes ]; then
                 printf '%s' "$script" | sudo sh -s -- --version "$version" --dir "$dir" || rc=$?
@@ -215,28 +308,53 @@ public enum CLIUpdate {
                 printf '%s' "$script" | sh -s -- --version "$version" --dir "$dir" || rc=$?
               fi
 
-              reported=$("$cli" --version 2>/dev/null || true)
+              ver_rc=0
+              reported=$("$cli" --version 2>/dev/null) || ver_rc=$?
               if [ "$rc" -ne 0 ]; then
-                if [ -z "$reported" ]; then
-                  restore_old "update failed (exit $rc) and $cli does not run" "$rc"
+                if [ "$ver_rc" -ne 0 ] || [ -z "$reported" ]; then
+                  restore_old_once "update failed (exit $rc) and $cli does not run"
+                  install_started=no
+                  exit "$rc"
                 fi
+                # Target still answers cleanly: leave it and clean backup.
+                install_started=no
                 if [ -n "$old" ]; then
                   if [ "$use_sudo" = yes ]; then sudo rm -f "$old"; else rm -f "$old"; fi
+                  old=""
                 fi
                 exit "$rc"
               fi
 
+              if [ "$ver_rc" -ne 0 ]; then
+                restore_old_once "the new CLI exited $ver_rc at $cli"
+                install_started=no
+                exit 1
+              fi
               case "$reported" in
                 "varlatch $version"|"varlatch $version "*) ;;
-                *) restore_old "the new CLI does not run at $cli" 1 ;;
+                *)
+                  restore_old_once "the new CLI reported '$reported' instead of $version at $cli"
+                  install_started=no
+                  exit 1 ;;
               esac
+
+              verified=yes
               if [ -n "$old" ]; then
                 if [ "$use_sudo" = yes ]; then sudo rm -f "$old"; else rm -f "$old"; fi
+                old=""
               fi
             elif listed_hash "varlatch-cli-$version.cjs" >/dev/null 2>&1; then
               if [ "$use_sudo" = yes ]; then
                 node_bin=$(command -v node) || { echo "varlatch: node was not found" >&2; exit 1; }
-                sudo "$node_bin" "$cli" self-update "$version"
+                node_real=$(resolve_path "$node_bin")
+                cli_real=$(resolve_path "$cli")
+                if is_root_safe "$cli_real" && is_root_safe "$(dirname "$cli_real")" && is_root_safe "$dir" \\
+                    && is_root_safe "$node_real" && is_root_safe "$(dirname "$node_real")"; then
+                  sudo "$node_real" "$cli_real" self-update "$version"
+                else
+                  echo "varlatch: refusing to run sudo on $cli_real (target, node, and their directories must be root-owned and not group- or other-writable). Update by hand: '$node_real' '$cli_real' self-update '$version'" >&2
+                  exit 1
+                fi
               else
                 "$cli" self-update "$version"
               fi

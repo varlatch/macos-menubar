@@ -149,7 +149,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     }
 
     /// A newer CLI release, once per release.
-    func postRelease(_ version: Version, current: Version?, update: AppController.Update) {
+    func postRelease(_ version: Version, current: Version?, update: CLIUpdateWay) {
         let content = UNMutableNotificationContent()
         content.title = "Varlatch CLI \(version) is available"
         let have = current.map { " (you have \($0))" } ?? ""
@@ -159,6 +159,9 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             content.categoryIdentifier = Category.releaseUpdate
         case .selfUpdate:
             content.body = "Update with varlatch self-update\(have)."
+            content.categoryIdentifier = Category.releaseUpdate
+        case .installer:
+            content.body = "A new release of the CLI is out\(have). Update in Terminal checks the download and asks before replacing anything."
             content.categoryIdentifier = Category.releaseUpdate
         case .manual:
             content.body = "A new release of the CLI is out\(have)."

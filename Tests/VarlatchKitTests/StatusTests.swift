@@ -209,6 +209,8 @@ struct PreferencesTests {
 struct VersionTests {
     @Test func parses() {
         #expect(Version.fromCLIOutput("varlatch 0.15.1 (migration 26)\n") == Version(0, 15, 1))
+        #expect(Version.fromCLIOutput("varlatch 0.50.0-rc.3\n") == Version(0, 50, 0, suffix: "rc.3"))
+        #expect(Version.fromCLIOutput("varlatch 0.50.0\n") == Version(0, 50, 0))
         #expect(Version.fromCLIOutput("Usage: varlatch <command>") == nil)
         #expect(Version("v0.16.0-rc.1") == Version(0, 16, 0, suffix: "rc.1"))
         #expect(Version("0.15") == nil)

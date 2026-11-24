@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+Ready for Varlatch 0.50.0, whose CLI is a native macOS program instead of
+a file that Node.js runs. Works with both, and with servers of both.
+
+- Recognizes a native macOS CLI (Mach-O binary) as a release install and
+  updates it with `varlatch self-update` (without `node` under `sudo`).
+  Ignores `-dev` builds for self-update.
+- Recognizes Homebrew copies under `/opt/homebrew/` and `/Cellar/`,
+  including a native Homebrew binary, and leaves them to
+  `brew upgrade varlatch`.
+- **Update in Terminal** for a pre-0.50 single-file CLI (`varlatch`) checks
+  the target release's `SHA256SUMS`: when the release ships a native macOS
+  binary, it verifies `install.sh` against `SHA256SUMS`, asks before
+  replacing anything, runs `install.sh --version <v> --dir <dir>`, and puts
+  the old CLI back if the new one does not run there; otherwise it runs
+  `self-update`. Sign-ins carry over.
+
 ## 0.2.1 (2026-11-20)
 
 - **Fix: a denied or expired sign-in from another device** showed as a

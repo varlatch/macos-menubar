@@ -6,15 +6,17 @@ import AppKit
 enum TerminalCommand {
     /// - Parameters:
     ///   - title: what the window says it does.
-    ///   - command: the shell command, shown before it runs.
-    static func run(title: String, command: String) {
+    ///   - command: the shell command to run.
+    ///   - displayCommand: what to show before running it (defaults to `command`; empty skips the line).
+    static func run(title: String, command: String, displayCommand: String? = nil) {
+        let shown = displayCommand ?? command
+        let showLine = shown.isEmpty ? "" : "echo \(shellQuoted("$ " + shown))\n"
         let script = """
             #!/bin/bash
             rm -f "$0"
             echo \(shellQuoted(title))
             echo
-            echo \(shellQuoted("$ " + command))
-            \(command)
+            \(showLine)\(command)
             status=$?
             echo
             if [ "$status" -eq 0 ]; then echo "Done. You can close this window."; else echo "That did not work (exit $status)."; fi

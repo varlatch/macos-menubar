@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (2026-11-25)
 
 Ready for Varlatch 0.50.0, whose CLI is a native macOS program instead of
 a file that Node.js runs. Works with both, and with servers of both.

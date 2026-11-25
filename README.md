@@ -64,8 +64,9 @@ Without the `varlatch` CLI, the panel explains what it is for and offers
 **Install in Terminal**, which opens Terminal and runs
 `brew install varlatch/tap/varlatch` (the app picks the CLI up by itself
 once it is there), or **Copy Command**. Without Homebrew, it points to
-[brew.sh](https://brew.sh) first. The release CLI needs Node.js 22 or newer,
-which the Homebrew formula brings along.
+[brew.sh](https://brew.sh) first. Releases before 0.50 need Node.js 22 or
+newer, which the Homebrew formula brings along; from 0.50, the CLI is a
+native program and needs no Node.js.
 
 With the CLI but no server known yet, the panel asks for the server's
 address (`varlatch.example.com`; `https://` is added when no scheme is
@@ -102,10 +103,14 @@ servers** is on.
 With **Check for new CLI releases** on, the panel's footer shows when a
 newer CLI release is out, with **Release Notes** and, for a CLI the app
 knows how to update, **Update in Terminal**: `brew upgrade varlatch` for a
-Homebrew CLI, `varlatch self-update` for the release build (Varlatch 0.11.0
-and newer; it checks the download and asks before replacing anything). A
-CLI built from a source checkout, or installed some other way, gets the
-release notes. A new release also triggers one notification.
+Homebrew CLI, `varlatch self-update` for the native release CLI, or a
+checked update in Terminal for a pre-0.50 release file (which verifies
+`install.sh`'s SHA-256 against `SHA256SUMS` and runs its bootstrap from
+0.50, or `self-update` before that; Varlatch 0.11.0 and newer; install
+`cosign` for an independent signature check). Each checks the download
+against `SHA256SUMS` and asks before replacing anything. A CLI built from
+a source checkout, or installed some other way, gets the release notes. A
+new release also triggers one notification.
 
 The app itself updates with Homebrew: `brew upgrade varlatch-menubar`. A
 running app keeps its old code until it is opened again, so it watches
@@ -154,7 +159,7 @@ defaults (`defaults read com.varlatch.menubar`):
 Apps opened from Finder do not get your shell's `PATH`, so the app looks
 for `varlatch` in `/opt/homebrew/bin`, `/usr/local/bin`, and
 `~/.local/bin`, and runs it with those directories in front of the `PATH`,
-so the release CLI finds `node` too.
+so a pre-0.50 release CLI finds `node` too.
 
 ## Opening at login
 
@@ -175,7 +180,7 @@ brew install varlatch/tap/varlatch varlatch/tap/varlatch-menubar
 ```
 
 This builds the app from source on your Mac and installs it with the
-`varlatch` CLI and Node.js, which the CLI needs. Homebrew loads formulae
+`varlatch` CLI (and Node.js for CLI releases before 0.50). Homebrew loads formulae
 from a tap like varlatch/tap only once you trust them, and installing a
 formula by its full name trusts it; the app needs the CLI, so name both
 (or run `brew trust varlatch/tap` first). Built here, the app is not

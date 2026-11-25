@@ -30,23 +30,85 @@ struct CLIInstallTests {
         return url.path
     }
 
+    func bytes(_ path: String, _ data: [UInt8]) -> String {
+        let url = dir.appendingPathComponent(path)
+        try! FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try! Data(data).write(to: url)
+        return url.path
+    }
+
+    @Test func homebrewAnchoredPrefixesAreCaseInsensitive() {
+        #expect(CLIInstall.isHomebrewPath("/opt/homebrew/bin/varlatch"))
+        #expect(CLIInstall.isHomebrewPath("/OPT/HOMEBREW/Cellar/varlatch/0.50.0/bin/varlatch"))
+        #expect(CLIInstall.isHomebrewPath("/usr/local/Homebrew/bin/varlatch"))
+        #expect(CLIInstall.isHomebrewPath("/USR/LOCAL/CELLAR/varlatch/0.50.0/bin/varlatch"))
+        #expect(CLIInstall.isHomebrewPath("/home/linuxbrew/.linuxbrew/bin/varlatch"))
+        // Unanchored paths with "Cellar" in the middle must not match.
+        #expect(!CLIInstall.isHomebrewPath("/tmp/fake/Cellar/varlatch/0.50.0/bin/varlatch"))
+        #expect(!CLIInstall.isHomebrewPath("/Users/me/.local/bin/varlatch"))
+    }
+
     @Test func homebrewThroughItsLink() throws {
-        let target = file("Cellar/varlatch/0.15.1/bin/varlatch", "#!/bin/bash\n")
+        let cellarPrefix = dir.appendingPathComponent("usr/local/Cellar").path
+        let target = file("usr/local/Cellar/varlatch/0.15.1/bin/varlatch", "#!/bin/bash\n")
         let link = dir.appendingPathComponent("bin/varlatch")
         try FileManager.default.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: target)
-        #expect(CLIInstall.kind(of: link.path) == .homebrew)
+        #expect(CLIInstall.kind(of: link.path, homebrewPrefixes: [cellarPrefix]) == .homebrew)
+        #expect(!CLIInstall.isNative(link.path))
+    }
+
+    @Test func homebrewNativeThroughItsLink() throws {
+        let cellarPrefix = dir.appendingPathComponent("usr/local/Cellar").path
+        let target = bytes("usr/local/Cellar/varlatch/0.50.0/bin/varlatch", [0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0])
+        let link = dir.appendingPathComponent("bin/varlatch-native")
+        try FileManager.default.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: target)
+        #expect(CLIInstall.kind(of: link.path, homebrewPrefixes: [cellarPrefix]) == .homebrew)
+        #expect(CLIInstall.isNative(link.path))
+    }
+
+    @Test func homebrewLegacyWrapperMarker() {
+        let wrapper = file("custom/bin/varlatch", "#!/bin/sh\n# installed with Homebrew\nexec node /x\n")
+        #expect(CLIInstall.kind(of: wrapper) == .homebrew)
+    }
+
+    @Test func nativeBinaryContainingHomebrewStringIsNotHomebrew() {
+        var data: [UInt8] = [0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0]
+        data.append(contentsOf: Array("installed with Homebrew".utf8))
+        let bin = bytes("local/bin/varlatch-with-msg", data)
+        #expect(CLIInstall.kind(of: bin) == .release)
+        #expect(CLIInstall.isNative(bin))
     }
 
     @Test func releaseBuild() {
         let path = file("local/bin/varlatch", "#!/usr/bin/env node\n/*! Varlatch CLI. Copyright 2026 Robotsson. */\n")
         #expect(CLIInstall.kind(of: path) == .release)
+        #expect(!CLIInstall.isNative(path))
+    }
+
+    @Test func nativeReleaseBuild() throws {
+        let arm64 = bytes("local/bin/varlatch-arm64", [0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0])
+        #expect(CLIInstall.kind(of: arm64) == .release)
+        #expect(CLIInstall.isNative(arm64))
+        let universal = bytes("local/bin/varlatch-fat", [0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 0])
+        #expect(CLIInstall.kind(of: universal) == .release)
+        #expect(CLIInstall.isNative(universal))
+        let fat64 = bytes("local/bin/varlatch-fat64", [0xca, 0xfe, 0xba, 0xbf, 0, 0, 0, 0])
+        #expect(CLIInstall.kind(of: fat64) == .release)
+        #expect(CLIInstall.isNative(fat64))
+        let link = dir.appendingPathComponent("local/bin/varlatch-link")
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: arm64)
+        #expect(CLIInstall.kind(of: link.path) == .release)
+        #expect(CLIInstall.isNative(link.path))
     }
 
     @Test func sourceCheckout() throws {
         let path = file("src/varlatch/apps/cli/dist/main.js", "#!/usr/bin/env node\n")
         try FileManager.default.createDirectory(at: dir.appendingPathComponent("src/varlatch/.git"), withIntermediateDirectories: true)
         #expect(CLIInstall.kind(of: path) == .checkout)
+        let native = bytes("src/varlatch/go/varlatch", [0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0])
+        #expect(CLIInstall.kind(of: native) == .checkout)
     }
 
     @Test func anythingElse() {

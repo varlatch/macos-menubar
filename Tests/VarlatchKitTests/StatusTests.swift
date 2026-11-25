@@ -209,9 +209,15 @@ struct PreferencesTests {
 struct VersionTests {
     @Test func parses() {
         #expect(Version.fromCLIOutput("varlatch 0.15.1 (migration 26)\n") == Version(0, 15, 1))
+        #expect(Version.fromCLIOutput("varlatch 0.50.0-rc.3\n") == Version(0, 50, 0, suffix: "rc.3"))
+        #expect(Version.fromCLIOutput("varlatch 0.50.0\n") == Version(0, 50, 0))
         #expect(Version.fromCLIOutput("Usage: varlatch <command>") == nil)
         #expect(Version("v0.16.0-rc.1") == Version(0, 16, 0, suffix: "rc.1"))
         #expect(Version("0.15") == nil)
+        #expect(Version("0.50.0-rc.1;id") == nil)
+        #expect(Version("0.50.0-") == nil)
+        #expect(Version("0.50.0-rc..1") == nil)
+        #expect(Version("0.50.0-" + String(repeating: "a", count: 64)) == nil)
         #expect(Version(0, 16, 0, suffix: "rc.1").description == "0.16.0-rc.1")
     }
 
@@ -220,6 +226,10 @@ struct VersionTests {
         #expect(Version(0, 14, 0) >= Version.deviceSignIn)
         #expect(Version(0, 13, 9) < Version.deviceSignIn)
         #expect(Version(0, 16, 0, suffix: "rc.1") < Version(0, 16, 0))
+        #expect(Version(0, 50, 0, suffix: "rc.9") < Version(0, 50, 0, suffix: "rc.10"))
+        #expect(Version(0, 50, 0, suffix: "rc.99999999999999999999999") < Version(0, 50, 0, suffix: "rc.100000000000000000000000"))
+        #expect(Version(0, 50, 0, suffix: "rc.007") == Version(0, 50, 0, suffix: "rc.007"))
+        #expect(Version(0, 50, 0, suffix: "rc.07") < Version(0, 50, 0, suffix: "rc.10"))
         #expect(Version(1, 0, 0) > Version(0, 99, 99))
     }
 }

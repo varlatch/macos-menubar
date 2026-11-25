@@ -311,41 +311,25 @@ final class AppController: ObservableObject {
         store.preferences.checkUpdates ? releases.available(current: store.cliVersion) : nil
     }
 
-    enum Update: Equatable {
-        /// `brew upgrade varlatch`.
-        case homebrew
-        /// `varlatch self-update <version>` (CLI 0.11.0 and newer).
-        case selfUpdate
-        /// Release notes only: updated the way it was installed.
-        case manual
+    func update(to version: Version) -> CLIUpdateWay {
+        CLIUpdate.way(kind: cliInstall, path: store.cliPath, version: store.cliVersion)
     }
 
-    func update(to version: Version) -> Update {
-        switch cliInstall {
-        case .homebrew: return .homebrew
-        case .release:
-            return (store.cliVersion.map { $0 >= Version.selfUpdate } ?? false) ? .selfUpdate : .manual
-        default: return .manual
-        }
-    }
-
-    /// Updates the CLI in Terminal: Homebrew's, or the release build's own
-    /// self-update, which shows what it checked and asks before replacing
-    /// anything.
+    /// Updates the CLI in Terminal: Homebrew's, the native release CLI's own
+    /// self-update, or a checked update script for a pre-0.50 release file.
+    /// Each shows what it checked and asks before replacing anything.
     func updateCLI(to version: Version) {
         switch update(to: version) {
         case .homebrew:
             upgradeWithHomebrew()
         case .selfUpdate:
             guard let path = store.cliPath else { return }
-            let directory = (path as NSString).deletingLastPathComponent
-            let quoted = TerminalCommand.shellQuoted(path)
-            // sudo resets PATH, so the release CLI's `env node` would not
-            // find node: name it.
-            let command = FileManager.default.isWritableFile(atPath: directory)
-                ? "\(quoted) self-update \(version)"
-                : "sudo \"$(command -v node)\" \(quoted) self-update \(version)"
+            let command = CLIUpdate.selfUpdateCommand(path: path, version: version)
             TerminalCommand.run(title: "Updating the Varlatch CLI", command: command)
+        case .installer:
+            guard let path = store.cliPath else { return }
+            let script = CLIUpdate.installerScript(path: path, version: version)
+            TerminalCommand.run(title: "Updating the Varlatch CLI", command: script, displayCommand: "")
         case .manual:
             NSWorkspace.shared.open(ReleaseChecker.releaseURL(version))
         }

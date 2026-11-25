@@ -125,6 +125,7 @@ struct UpdateView: View {
                         switch update {
                         case .homebrew: Text("Update: run ") + Text("brew upgrade varlatch").font(.system(size: 11, design: .monospaced))
                         case .selfUpdate: Text("Update: run ") + Text("varlatch self-update").font(.system(size: 11, design: .monospaced))
+                        case .installer: Text("Update in Terminal checks the download and asks before replacing anything.")
                         case .manual: Text("Update it the way you installed it.")
                         }
                     }
